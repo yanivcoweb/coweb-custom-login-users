@@ -184,8 +184,6 @@ function clu_default_messages() {
 
         // ── Restricted content ───────────────────────────────────────────
         // {login_url} = login page that leads back here, {register_url} = register page
-        'content_login_required'     => __( 'This content is for approved users. Please <a href="{login_url}">log in</a> to see it.', 'custom-login-users' ),
-        'content_no_access'          => __( 'This content is for approved users only.', 'custom-login-users' ),
 
         // ── Shortcode: My Account ────────────────────────────────────────
         'my_account_not_logged_in'      => __( 'You must be logged in to view this page.', 'custom-login-users' ),

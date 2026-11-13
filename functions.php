@@ -576,31 +576,6 @@ function clu_send_mail( $to, $build, $recipient = null, $headers = null ) {
 }
 
 /**
- * Acts on an account made in the pending role. The plugin's own form makes accounts
- * that still have to confirm their address in another role, and sends the link itself.
- */
-add_action( 'user_register', 'clu_on_user_register' );
-function clu_on_user_register( $user_id ) {
-    $user = get_userdata( $user_id );
-
-    if ( ! $user || ! in_array( clu_get_role_slug( 'pending_role' ), (array) $user->roles, true ) ) {
-        return;
-    }
-
-    // An account made by someone who manages users is left in the role they chose.
-    $made_by_admin = current_user_can( 'create_users' );
-
-    // A sign-up from another form, such as the one built into WordPress when the pending
-    // role is the site's default role.
-    if ( clu_email_confirmation_is_on() && ! $made_by_admin ) {
-        clu_ask_to_confirm_email( $user );
-        return;
-    }
-
-    clu_send_registration_emails( $user, ! $made_by_admin );
-}
-
-/**
  * Tells whether new users are approved without waiting for an admin. Set on the User
  * Roles tab.
  *
@@ -620,7 +595,7 @@ function clu_auto_approve_is_on() {
  */
 function clu_send_registration_emails( $user, $may_approve = true ) {
     if ( $may_approve && clu_auto_approve_is_on() ) {
-        $user->set_role( clu_get_role_slug( 'approved_role' ) );
+        clu_set_user_status( $user->ID, 'approved' );
         clu_send_new_user_email( get_userdata( $user->ID ), true );
         return;
     }
@@ -659,36 +634,6 @@ function clu_send_new_user_email( $user, $approved = false ) {
             ),
         ];
     } );
-}
-
-/**
- * Acts on a role change, whether it came from the Approve and Reject links, from a
- * confirmed email address, or from the role control on the user's screen.
- */
-add_action( 'set_user_role', 'clu_on_user_role_change', 10, 3 );
-function clu_on_user_role_change( $user_id, $new_role, $old_roles ) {
-    $pending     = clu_get_role_slug( 'pending_role' );
-    $rejected    = clu_get_role_slug( 'rejected_role' );
-    $unconfirmed = clu_get_role_slug( 'unconfirmed_role' );
-    $old         = (array) $old_roles;
-
-    if ( $new_role === clu_get_role_slug( 'approved_role' ) && array_intersect( [ $pending, $rejected, $unconfirmed ], $old ) ) {
-        clu_send_set_password_email( $user_id );
-    }
-
-    // The address is confirmed, so the registration reaches the admin now.
-    if ( $new_role === $pending && in_array( $unconfirmed, $old, true ) ) {
-        clu_send_registration_emails( get_userdata( $user_id ) );
-    }
-
-    if ( $new_role === $rejected && in_array( $pending, $old, true ) ) {
-        clu_send_rejection_email( $user_id );
-    }
-
-    // These accounts may not log in, so one that is logged in right now has to go too.
-    if ( in_array( $new_role, [ $pending, $rejected, $unconfirmed ], true ) ) {
-        WP_Session_Tokens::get_instance( $user_id )->destroy_all();
-    }
 }
 
 /**

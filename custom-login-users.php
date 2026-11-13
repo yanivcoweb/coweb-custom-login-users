@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name:       Custom Login Users
+ * Plugin Name:       Coweb Custom Login Users
  * Plugin URI:        https://github.com/yanivcoweb/custom-login-user
  * Description:       Front-end login, registration, password and account pages, with an admin approval step for new users.
- * Version:           1.9.0
+ * Version:           2.0.0
  * Requires at least: 5.0
  * Requires PHP:      7.4
  * Author:            Yaniv Sasson
@@ -14,7 +14,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CLU_VERSION', '1.9.0' );
+define( 'CLU_VERSION', '2.0.0' );
 define( 'CLU_PLUGIN_FILE', __FILE__ );
 define( 'CLU_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CLU_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -29,7 +29,6 @@ $clu_includes = [
     'src/approvals.php',
     'src/user-status.php',
     'src/register-fields.php',
-    'src/content-access.php',
     'src/login-replacement.php',
     'src/email-confirmation.php',
     'src/login-protection.php',
@@ -41,7 +40,6 @@ $clu_includes = [
     'shortcodes/shortcode-register-form.php',
     'shortcodes/shortcode-auth-buttons.php',
     'shortcodes/shortcode-my-account.php',
-    'shortcodes/shortcode-approved-only.php',
     'ajax/ajax-nonce.php',
     'ajax/ajax-password-lost.php',
     'ajax/ajax-password-set.php',
@@ -64,9 +62,8 @@ unset( $clu_includes, $clu_include );
 
 register_activation_hook( __FILE__, 'clu_activate' );
 function clu_activate() {
-    // First, because it tells an old site from a new one by the roles being there.
+    // Tells an old site from a new one by the roles of versions before 2.0 being there.
     clu_maybe_upgrade();
-    clu_add_roles();
     update_option( 'clu_db_version', CLU_VERSION );
 }
 
@@ -85,14 +82,17 @@ function clu_maybe_upgrade() {
     $is_update = $installed || get_role( 'pending_user' );
 
     if ( ! $installed ) {
-        clu_add_roles();
         clu_migrate_saved_messages();
     }
 
     if ( $is_update && version_compare( $installed ?: '1.0', '1.2.0', '<' ) ) {
-        clu_add_rejected_role();
         clu_keep_legacy_register_fields();
         clu_migrate_saved_admin_email();
+    }
+
+    // 2.0: where a registration stands is a status, and the plugin's own roles go.
+    if ( $is_update && version_compare( $installed ?: '1.0', '2.0.0', '<' ) ) {
+        clu_migrate_roles_to_status();
     }
 
     update_option( 'clu_db_version', CLU_VERSION );

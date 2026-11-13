@@ -237,8 +237,6 @@ jQuery(function ($) {
         post($(this), $('#clu-save-roles-spinner'), $result, {
             action: 'clu_save_roles',
             nonce: config.rolesNonce,
-            pending_role: $('#clu-pending-role').val(),
-            approved_role: $('#clu-approved-role').val(),
             auto_approve: $('#clu-auto-approve').is(':checked') ? '1' : '',
         }, reportMessage($result));
     });
@@ -259,7 +257,7 @@ jQuery(function ($) {
                     .val(response.data.slug)
                     .text(response.data.name + ' (' + response.data.slug + ')');
 
-                $('#clu-pending-role, #clu-approved-role, #clu-delete-role-select').append($option.clone());
+                $('#clu-delete-role-select').append($option.clone());
                 $('#clu-new-role-slug, #clu-new-role-name').val('');
             }
         });
@@ -286,7 +284,7 @@ jQuery(function ($) {
             reportMessage($result)(response);
 
             if (response.success) {
-                $('#clu-delete-role-select, #clu-pending-role, #clu-approved-role')
+                $('#clu-delete-role-select')
                     .find('option')
                     .filter(function () {
                         return $(this).val() === slug;

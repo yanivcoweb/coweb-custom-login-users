@@ -5,9 +5,9 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Confirming the email address of a new user before the registration reaches the admin.
  *
- * While unconfirmed, the account has the Unconfirmed User role: it cannot log in, it is
- * not counted as awaiting approval, and nobody hears about it. The link in the email
- * moves it to the pending role, and from there everything goes on as before. Registering
+ * While unconfirmed, the account has the status "unconfirmed": it is not counted as
+ * awaiting approval, and nobody hears about it. The link in the email makes it pending,
+ * and from there everything goes on as before. Registering
  * again with the same address sends a new link, so a lost or expired one is no dead end.
  */
 
@@ -41,14 +41,13 @@ function clu_email_confirm_hash( $key ) {
 }
 
 /**
- * Moves an account to the Unconfirmed User role and emails it the link.
+ * Marks an account as unconfirmed and emails it the link.
  *
  * @param WP_User $user
  * @return bool Whether the email went out.
  */
 function clu_ask_to_confirm_email( $user ) {
-    clu_add_unconfirmed_role();
-    $user->set_role( clu_get_role_slug( 'unconfirmed_role' ) );
+    clu_set_user_status( $user->ID, 'unconfirmed' );
 
     return clu_send_confirmation_email( $user );
 }
@@ -94,7 +93,7 @@ function clu_send_confirmation_email( $user ) {
 
 /**
  * Checks a confirmation link and moves the user on to approval. The admin hears about
- * the registration from clu_on_user_role_change().
+ * the registration from clu_on_registration_status_change().
  *
  * The hash stays after the address is confirmed, so that a second click on the same
  * link, which mail apps and link scanners often make, is told apart from a wrong one.
@@ -126,7 +125,7 @@ function clu_confirm_user_email( $user_id, $key ) {
     }
 
     update_user_meta( $user->ID, 'clu_email_confirmed', time() );
-    $user->set_role( clu_get_registration_role() );
+    clu_set_user_status( $user->ID, 'pending' );
 
     return 'confirmed';
 }

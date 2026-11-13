@@ -164,7 +164,6 @@ function clu_render_settings_page() {
         <h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
         <div class="clu-shortcode-info notice notice-info inline">
             <p><strong>Auth Buttons Shortcode:</strong> <code>[clu_auth_buttons]</code></p>
-            <p><strong>Approved Users Only:</strong> <code>[clu_approved_only]...[/clu_approved_only]</code> around part of a page, or the <strong>Access</strong> box on the edit screen for a whole page.</p>
             <p>The older shortcode names, such as <code>[custom-login-form]</code>, keep working on existing pages.</p>
         </div>
         <nav class="nav-tab-wrapper">
@@ -547,7 +546,7 @@ function clu_render_messages_tab() {
             'login_second_step'           => 'Login: on to a second step, such as a code from a two-factor plugin',
             'login_locked'                => 'Login: refused after too many failed attempts (<code>{minutes}</code> = minutes left)',
             'captcha_failed'              => 'Bot check not passed',
-            'account_pending'             => 'Account awaiting approval',
+            'account_pending'             => 'Account awaiting approval (for the theme: the plugin itself turns nobody away)',
             'account_rejected'            => 'Account rejected',
             'account_unconfirmed'         => 'Account whose email address is not confirmed yet',
             'register_required_fields'    => 'Register: required fields missing',
@@ -592,8 +591,6 @@ function clu_render_messages_tab() {
             'logout_button_text'      => 'Auth buttons: logout text',
             'login_button_text'       => 'Auth buttons: login text',
             'register_button_text'    => 'Auth buttons: register text',
-            'content_login_required'  => 'Restricted content: for a visitor (<code>{login_url}</code> = login page, <code>{register_url}</code> = register page)',
-            'content_no_access'       => 'Restricted content: for a logged-in user who is not approved',
         ],
         'Email Templates' => [
             'email_link_text'       => 'Text of the link in password emails',
@@ -670,52 +667,12 @@ function clu_render_messages_tab() {
 }
 
 function clu_render_roles_tab() {
-    $all_roles     = wp_roles()->roles;
-    $pending_role  = clu_get_role_slug( 'pending_role' );
-    $approved_role = clu_get_role_slug( 'approved_role' );
-
-    // Roles that can manage the site are not offered: see clu_role_is_privileged().
-    $assignable = array_filter(
-        $all_roles,
-        function ( $slug ) {
-            return ! clu_role_is_privileged( $slug ) && ! clu_role_is_reserved( $slug );
-        },
-        ARRAY_FILTER_USE_KEY
-    );
+    $all_roles = wp_roles()->roles;
     ?>
-    <h2>Role Assignments</h2>
-    <p>Choose which WordPress role is assigned on registration and which role means the user is approved.</p>
-
-    <table class="form-table">
-        <tr>
-            <th><label for="clu-pending-role">Registration role (pending)</label></th>
-            <td>
-                <select id="clu-pending-role">
-                    <?php foreach ( $assignable as $slug => $role ) : ?>
-                        <option value="<?php echo esc_attr( $slug ); ?>" <?php selected( $slug, $pending_role ); ?>>
-                            <?php echo esc_html( $role['name'] ); ?> (<?php echo esc_html( $slug ); ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <p class="description">Newly registered users are assigned this role, and cannot log in until they leave it.</p>
-            </td>
-        </tr>
-        <tr>
-            <th><label for="clu-approved-role">Approval role (approved)</label></th>
-            <td>
-                <select id="clu-approved-role">
-                    <?php foreach ( $assignable as $slug => $role ) : ?>
-                        <option value="<?php echo esc_attr( $slug ); ?>" <?php selected( $slug, $approved_role ); ?>>
-                            <?php echo esc_html( $role['name'] ); ?> (<?php echo esc_html( $slug ); ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <p class="description">When a user is changed to this role they receive a set-password email.</p>
-            </td>
-        </tr>
-    </table>
-    <p class="description">Rejecting a user from the <strong>Users</strong> list moves them to the Rejected User role and sends them an email. They cannot log in, and you can still approve them later, or delete them.</p>
-    <p class="description">When new users confirm their email address first (on the <strong>Mail</strong> tab), they have the Unconfirmed User role until they do. You can approve one directly, or delete the accounts nobody confirmed.</p>
+    <h2>Approval of New Users</h2>
+    <p>A new user gets the default role of the site (<strong>Settings → General</strong>), and where the registration stands is a status on the user: Pending, Approved or Rejected. You approve and reject on the <strong>Users</strong> list or on the user's own screen. Approving sends the set-password email, rejecting sends the rejection email.</p>
+    <p class="description">The status stops nobody from logging in and hides no content. A site that wants that does it in its theme, for example with <code>clu_get_user_status( $user_id )</code>.</p>
+    <p class="description">When new users confirm their email address first (on the <strong>Mail</strong> tab), their status is "Email not confirmed" until they do. You can approve one directly, or delete the accounts nobody confirmed.</p>
 
     <table class="form-table">
         <tr>
@@ -731,7 +688,7 @@ function clu_render_roles_tab() {
     </table>
 
     <p>
-        <button type="button" id="clu-save-roles-btn" class="button button-primary">Save Role Assignments</button>
+        <button type="button" id="clu-save-roles-btn" class="button button-primary">Save</button>
         <span id="clu-save-roles-spinner" class="spinner"></span>
     </p>
     <div id="clu-save-roles-result"></div>
@@ -739,7 +696,7 @@ function clu_render_roles_tab() {
     <hr style="margin:24px 0;">
 
     <h2>Create New Role</h2>
-    <p>Create a custom WordPress role. Once created it will appear in the dropdowns above.</p>
+    <p>Create a custom WordPress role.</p>
 
     <table class="form-table">
         <tr>
@@ -764,7 +721,7 @@ function clu_render_roles_tab() {
     <hr style="margin:24px 0;">
 
     <h2>Delete Role</h2>
-    <p>Permanently delete a custom role. A role that is assigned above, or that users still have, cannot be deleted.</p>
+    <p>Permanently delete a custom role. The default role of the site, or a role that users still have, cannot be deleted.</p>
 
     <table class="form-table">
         <tr>
@@ -775,7 +732,7 @@ function clu_render_roles_tab() {
                     <?php
                     $protected = [ 'administrator', 'editor', 'author', 'contributor', 'subscriber' ];
                     foreach ( $all_roles as $slug => $role ) :
-                        if ( in_array( $slug, $protected, true ) || clu_role_is_reserved( $slug ) ) {
+                        if ( in_array( $slug, $protected, true ) ) {
                             continue;
                         }
                         ?>

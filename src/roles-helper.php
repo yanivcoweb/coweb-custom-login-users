@@ -2,84 +2,28 @@
 
 defined( 'ABSPATH' ) || exit;
 
-/**
- * Returns the configured role slug for a given slot.
- *
- * @param string $type  'pending_role', 'approved_role', 'rejected_role' or 'unconfirmed_role'
- * @return string       The role slug
+/*
+ * Since 2.0 the plugin has no roles of its own. Where a registration stands is a status
+ * on the user (see user-status.php), and a new user gets the site's default role.
  */
-function clu_get_role_slug( $type ) {
-    $options  = get_option( 'clu_roles', [] );
-    $defaults = [
-        'pending_role'     => 'pending_user',
-        'approved_role'    => 'approved_user',
-        // Not settings: these two always get the same role.
-        'rejected_role'    => 'rejected_user',
-        'unconfirmed_role' => 'unconfirmed_user',
+
+/**
+ * Returns the roles versions before 2.0 used to mark where an account stands, and the
+ * status each one became.
+ *
+ * @return array<string,string> role slug => status
+ */
+function clu_old_state_roles() {
+    return [
+        'unconfirmed_user' => 'unconfirmed',
+        'pending_user'     => 'pending',
+        'rejected_user'    => 'rejected',
+        'approved_user'    => 'approved',
     ];
-
-    if ( $type === 'rejected_role' || $type === 'unconfirmed_role' ) {
-        return $defaults[ $type ];
-    }
-
-    return ( is_array( $options ) && ! empty( $options[ $type ] ) ) ? $options[ $type ] : $defaults[ $type ];
 }
 
 /**
- * Adds the plugin's own roles. They hold no capabilities.
- */
-function clu_add_roles() {
-    $capabilities = [
-        'read'         => false,
-        'edit_posts'   => false,
-        'delete_posts' => false,
-    ];
-
-    add_role( 'pending_user', __( 'Pending User', 'custom-login-users' ), $capabilities );
-    add_role( 'approved_user', __( 'Approved User', 'custom-login-users' ), $capabilities );
-    clu_add_rejected_role();
-}
-
-/**
- * Adds the role of rejected users, if it is missing. It holds no capabilities.
- */
-function clu_add_rejected_role() {
-    add_role( 'rejected_user', __( 'Rejected User', 'custom-login-users' ), [
-        'read'         => false,
-        'edit_posts'   => false,
-        'delete_posts' => false,
-    ] );
-}
-
-/**
- * Adds the role of users who have not confirmed their email address yet, if it is
- * missing. Only when a site asks for confirmation, so other sites never see it.
- */
-function clu_add_unconfirmed_role() {
-    add_role( 'unconfirmed_user', __( 'Unconfirmed User', 'custom-login-users' ), [
-        'read'         => false,
-        'edit_posts'   => false,
-        'delete_posts' => false,
-    ] );
-}
-
-/**
- * Tells whether a role is kept for the plugin's own use, so that it cannot be chosen as
- * the pending or approved role, or deleted.
- *
- * @param string $slug
- * @return bool
- */
-function clu_role_is_reserved( $slug ) {
-    return in_array( $slug, [ clu_get_role_slug( 'rejected_role' ), clu_get_role_slug( 'unconfirmed_role' ) ], true );
-}
-
-/**
- * Tells whether a role is too powerful to be the pending or approved role.
- *
- * Whatever is chosen as the pending role goes to anyone who fills in the public
- * form, and both roles are locked out of the dashboard, so an administrator could
- * hand out full control or lock out the site's own admins.
+ * Tells whether a role is too powerful to be handed to whoever fills in the public form.
  *
  * @param string $slug
  * @return bool
@@ -115,23 +59,79 @@ function clu_role_is_privileged( $slug ) {
 }
 
 /**
- * Returns the role for a public sign-up.
+ * Returns the role for a public sign-up: the site's default role (Settings → General).
  *
- * The saved setting is checked again here, because a site may have saved a
- * privileged role before the settings screen started refusing them.
+ * Checked here, because that setting may name a role that can manage the site, or one
+ * that no longer exists.
  *
  * @return string
  */
 function clu_get_registration_role() {
-    $role = clu_get_role_slug( 'pending_role' );
+    $role = (string) apply_filters( 'clu_registration_role', (string) get_option( 'default_role', 'subscriber' ) );
 
-    if ( get_role( $role ) && ! clu_role_is_privileged( $role ) ) {
+    if ( get_role( $role ) && ! clu_role_is_privileged( $role ) && ! isset( clu_old_state_roles()[ $role ] ) ) {
         return $role;
     }
 
-    if ( ! get_role( 'pending_user' ) ) {
-        clu_add_roles();
+    return 'subscriber';
+}
+
+/**
+ * Moves a site from the roles of versions before 2.0 to the status. Runs once, on update.
+ *
+ * Whoever holds one of the four old roles gets the matching status and the site's
+ * default role instead, and the roles are removed. A site that had chosen other roles
+ * as its pending or approved role keeps those roles on its users, who get the status
+ * next to them. A status a user already has is left as it is.
+ */
+function clu_migrate_roles_to_status() {
+    $default = clu_get_registration_role();
+
+    if ( isset( clu_old_state_roles()[ (string) get_option( 'default_role' ) ] ) ) {
+        update_option( 'default_role', $default );
     }
 
-    return 'pending_user';
+    $saved  = get_option( 'clu_roles' );
+    $custom = [];
+
+    foreach ( [ 'pending_role' => 'pending', 'approved_role' => 'approved' ] as $slot => $status ) {
+        $slug = is_array( $saved ) && ! empty( $saved[ $slot ] ) ? (string) $saved[ $slot ] : '';
+
+        if ( $slug !== '' && ! isset( clu_old_state_roles()[ $slug ] ) && get_role( $slug ) ) {
+            $custom[ $slug ] = $status;
+        }
+    }
+
+    // The strongest last, so that someone approved who also kept an older role ends approved.
+    foreach ( $custom + clu_old_state_roles() as $slug => $status ) {
+        $own = isset( clu_old_state_roles()[ $slug ] );
+
+        foreach ( get_users( [ 'role' => $slug ] ) as $user ) {
+            if ( $own || get_user_meta( $user->ID, 'clu_status', true ) === '' ) {
+                update_user_meta( $user->ID, 'clu_status', $status );
+            }
+
+            if ( ! $own ) {
+                continue;
+            }
+
+            // They signed up through the plugin, so its emails still follow their status.
+            update_user_meta( $user->ID, 'clu_signup', time() );
+            $user->remove_role( $slug );
+
+            if ( ! array_diff( (array) $user->roles, array_keys( clu_old_state_roles() ) ) ) {
+                $user->set_role( $default );
+            }
+        }
+    }
+
+    foreach ( array_keys( clu_old_state_roles() ) as $slug ) {
+        if ( get_role( $slug ) && ! get_users( [ 'role' => $slug, 'number' => 1, 'fields' => 'ID' ] ) ) {
+            remove_role( $slug );
+        }
+    }
+
+    delete_option( 'clu_roles' );
+    delete_transient( 'clu_pending_count' );
+    delete_transient( 'clu_status_pending_count' );
 }

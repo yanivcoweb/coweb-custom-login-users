@@ -68,7 +68,7 @@ function clu_add_user_columns( $columns ) {
     }
 
     // Only on the lists where someone decides on registrations, to keep the others short.
-    if ( in_array( clu_query_text( 'role' ), [ clu_get_role_slug( 'pending_role' ), clu_get_role_slug( 'rejected_role' ) ], true ) ) {
+    if ( in_array( clu_query_text( 'clu_status' ), [ 'pending', 'rejected' ], true ) ) {
         $new_columns['clu_details'] = __( 'Registration Details', 'custom-login-users' );
     }
 

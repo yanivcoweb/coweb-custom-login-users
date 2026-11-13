@@ -1,17 +1,18 @@
-# Custom Login Users
+# Coweb Custom Login Users
 
 A WordPress plugin that adds front-end pages for login, registration, password reset and account details, with an admin approval step for new users.
 
+This is the Coweb line of the plugin, from version 2.0, in the folder `coweb-custom-login-users`. It grew out of Custom Login Users 1.9, which other sites keep running as it was. The two are not to be active on one site together: they share their function names and settings.
+
 **Author:** Yaniv Sasson
-**Version:** 1.7.1
+**Version:** 2.0.0
 
 ---
 
 ## Features
 
 - Front-end pages for Login, Register, Lost Password, Set Password and My Account, all submitted over AJAX
-- User approval workflow (Pending → Approved or Rejected), with Approve and Reject links and bulk actions on the Users list. A pending or rejected user cannot log in or reset a password on any form of the site, wp-login.php and WooCommerce included
-- Restricted content: whole pages or parts of a page for approved users only
+- User approval workflow (Pending → Approved or Rejected), kept as a status on the user, with links and bulk actions on the Users list. The status stops nobody from logging in and hides no content: a site that wants that does it in its theme
 - Flexible register form: turn fields on and off, make them required or optional, change their order, add your own, and choose which ones users can change on My Account
 - Admin notification email on new registrations with what the user filled in, an email with a set-password link upon approval, and a rejection email
 - Optional emails to new users: a link that confirms their address before the registration reaches the admin, and a note that the registration was received
@@ -20,7 +21,7 @@ A WordPress plugin that adds front-end pages for login, registration, password r
 - Optional automatic approval, for sites that want sign-ups without waiting for an admin
 - A theme can replace the HTML of any form with its own copy
 - Configurable password rules (min length, uppercase, lowercase, numbers, symbols)
-- Custom user roles: `Pending User`, `Approved User` and `Rejected User`, and `Unconfirmed User` on sites that ask for the address to be confirmed, all kept out of the WordPress dashboard
+- No roles of its own: a new user gets the default role of the site
 - Protection against spam and abuse: a hidden bot trap and a limit on the registration form, a limit on reset emails, and the same answer for known and unknown accounts on the login and lost-password forms
 - Optional login protection: a limit on failed logins across the whole site, and Cloudflare Turnstile or Google reCAPTCHA on the forms
 - Changing the email address on My Account needs the current password
@@ -39,7 +40,6 @@ The plugin adds pages next to the default ones, and `wp-login.php` keeps working
 | `[clu_password_set_form]` | `[custom-password-set]` | Set or reset password form, opened from the emailed link |
 | `[clu_my_account]` | `[my-account]` | Profile and change-password forms |
 | `[clu_auth_buttons]` | `[custom-auth-buttons]` | Login and register links, or the user's name and a logout link |
-| `[clu_approved_only]...[/clu_approved_only]` | | Shows what it encloses to approved users only |
 
 The forms accept `show_title="true"` to show their title from the settings.
 
@@ -49,13 +49,24 @@ The login form honours `?redirect_to=` for addresses on the same site.
 
 ## User Approval Workflow
 
-1. A user registers via the front-end form and is assigned the **Pending User** role.
+1. A user registers via the front-end form. The account gets the default role of the site (**Settings > General**) and the status **Pending**.
 2. The site admin receives an email with what the user filled in and a link to the users awaiting approval. With no address set on the Mail tab, it goes to the site admin email. The Users menu shows how many are waiting.
-3. On **Users > Awaiting Approval**, which also lists the registration details, the admin clicks **Approve** or **Reject**, or selects several users and uses the bulk actions. Changing the role on the user's own screen does the same.
+3. On **Users > Awaiting Approval**, which also lists the registration details, the admin clicks the approve or reject link under the name, or selects several users and uses the bulk actions. Changing the status on the user's own screen does the same.
 4. An approved user automatically receives an email with a link to set their password. That link is valid for 7 days. Other reset links stay at the WordPress default of 1 day.
 5. After setting a password, the user is logged in.
 
-Rejecting moves the user to the **Rejected User** role and emails them. They cannot log in or reset a password, and they cannot register again with the same address. The account stays, so a mistake can be undone with **Approve**, which sends the set-password email. To remove someone without an email, such as a bot, use the normal **Delete** link.
+Rejecting sets the status **Rejected** and emails the user. They cannot register again with the same address. The account stays, so a mistake can be undone by approving, which sends the set-password email. To remove someone without an email, such as a bot, use the normal **Delete** link.
+
+**The plugin stops nobody.** A user who is pending or rejected can log in (once they have a password, for example through a reset), and no page is hidden from them. Blocking a login, a password reset or a page is for the site's theme, which asks where the user stands: `clu_get_user_status( $user_id )`, `clu_user_is_pending( $user )`, `clu_user_is_rejected( $user )`, `clu_user_is_unconfirmed( $user )`, and `clu_account_state_message( $user )` for the key of the matching text on the Messages tab. For example:
+
+```php
+add_filter( 'authenticate', function ( $user ) {
+    $key = function_exists( 'clu_account_state_message' ) ? clu_account_state_message( $user ) : '';
+    return $key !== '' ? new WP_Error( 'not_approved', clu_render_message( $key ) ) : $user;
+}, 99 );
+```
+
+The emails follow the status only for users who signed up through the plugin's form or the form built into WordPress. A status set on any other user, for example by another plugin, sends nothing.
 
 Registration follows the WordPress setting **Settings > General > Anyone can register**. When it is off, the form and its AJAX endpoint are both closed.
 
@@ -69,11 +80,11 @@ Both are off by default, on the **Mail** tab.
 
 **Confirm the email address.** A new user gets an email with a link, and the registration reaches the admin only once they click it. Made-up and mistyped addresses never reach you.
 
-- Until then the account has the **Unconfirmed User** role. It cannot log in or reset a password, and it is not counted as awaiting approval
+- Until then the account has the status **Email not confirmed**, and it is not counted as awaiting approval
 - The link leads to the register page, or the login page if there is none, which says whether it worked. It stays valid for 7 days
 - Registering again with the same address sends a new link and keeps the details from the first time. This is the way to get a link that was lost or expired
 - Sign-ups through the form built into WordPress confirm their address too
-- On the Users list an unconfirmed account offers **Approve** only, for an admin who knows the person. Accounts nobody confirmed can be removed with **Delete**. They are not removed by themselves
+- On the Users list an unconfirmed account offers approving only, for an admin who knows the person. Accounts nobody confirmed can be removed with **Delete**. They are not removed by themselves
 - Turning this on or off does not change accounts that already exist, and links already sent keep working
 
 **Registration received.** The user gets an email saying the registration was received and waits for approval. With the confirmation on, it goes out once the address is confirmed.
@@ -102,7 +113,7 @@ Both are off by default, on the **Login Protection** tab.
 
 **Two-factor plugins.** With the Two Factor plugin, a user who has a second step is taken from this plugin's login form to its code page, and is logged in once the code is right. It works with Replace wp-login.php on as well. Another two-factor plugin can do the same through the `clu_second_step_url` filter; until then, its users log in on the default form at `/wp-login.php?clu_native=1`.
 
-**Page caches.** Pages with restricted content, whole or in part, are kept out of page caches: with WP Super Cache on, none of their text reached its cache. A form on a cached page whose security key has grown old renews the key by itself and sends again.
+**Page caches.** A form on a cached page whose security key has grown old renews the key by itself and sends again.
 
 **Changing the email address.** On My Account a field for the current password appears once the email address is changed, and the change is refused without it. A new address is the way to take over an account, through a password reset sent there, so a stolen session alone is not enough. WordPress also emails the old address about the change.
 
@@ -143,52 +154,17 @@ Before turning this on, know that:
 
 ## User Status
 
-For a site where some users are a kind of their own that an admin approves, such as business customers or members, while everyone keeps the role they have. Off by default: tick **Use a status** on the **User Status** tab, and give that kind of user a name, which becomes the title of the status on the admin screens.
+Where a user stands is kept on the user, next to their role and **without ever changing it**: None, Email not confirmed, Pending, Approved or Rejected.
 
-- A user's status is None, Pending, Approved or Rejected. It is kept on the user, and **never changes their role**
+- It is how the plugin follows a registration (see [User Approval Workflow](#user-approval-workflow)), and a site can use the same status for a kind of user that an admin approves, such as business customers. The name on the **User Status** tab becomes its title on the admin screens
 - An admin sets it on the user's screen, or on the Users list: a column, links under the name, bulk actions, and a link above the list to the pending ones. Whoever may change a user's role may change their status
-- A user with the Approved status sees [restricted content](#restricted-content)
-- A status does not stop anyone from logging in, and the plugin sends no email about it. Other code can act on it, as below
-- With the setting off nobody has a status and nothing of it shows. What was saved stays, and counts again when the setting is turned back on
+- It stops nobody from logging in and hides no content
+- Emails follow it only for users who signed up through the plugin
 
-It is apart from the [approval of new registrations](#user-approval-workflow), which works through roles and is the same with the status on or off. A site can use either, or both.
-
-For code: `clu_status_is_on()`, `clu_status_label()`, `clu_get_user_status( $user_id )`, `clu_user_status_is_approved( $user_id )` and `clu_set_user_status( $user_id, $status )`, with the status `pending`, `approved`, `rejected` or `''`. The action `clu_user_status_changed` fires after a change with the user ID, the new status and the old one.
+For code: `clu_status_label()`, `clu_get_user_status( $user_id )`, `clu_user_status_is_approved( $user_id )` and `clu_set_user_status( $user_id, $status )`, with the status `unconfirmed`, `pending`, `approved`, `rejected` or `''`. The action `clu_user_status_changed` fires after a change with the user ID, the new status and the old one.
 
 ---
 
-## Restricted Content
-
-Approved users, site administrators and whoever can edit the page can see restricted content. Approved means the approved role, or the Approved [status](#user-status) on a site that uses it.
-
-**A whole page or post:** tick **Approved users only** in the **Access** box on its edit screen. The lists in wp-admin mark it next to the title.
-
-- A visitor is sent to the login page, and comes back to the page after logging in
-- A logged-in user who is not approved sees a plain message, or goes to the page set under **Page for users without access** on the Pages URL tab
-- Search, including REST search, does not find it. Archives, feeds and the REST API show the message in place of its text and excerpt
-- Pages that people need on the way in, with a login, registration or password form or set on the Pages URL tab, stay open even if ticked
-- These pages are kept out of page caches
-
-**Part of a page:**
-
-```
-[clu_approved_only]Price list[/clu_approved_only]
-[clu_approved_only message="Members see the prices here."]...[/clu_approved_only]
-[clu_approved_only message=""]Others see nothing here, not even a message.[/clu_approved_only]
-```
-
-The default texts are on the Messages tab.
-
-What this does not cover:
-
-- **Uploaded files.** A PDF linked from a restricted page can still be opened by anyone who has its direct address
-- **Turning the plugin off.** Deactivating or deleting it opens every restricted page
-- **Child pages.** Each page is restricted on its own
-- **Titles and addresses.** A restricted post keeps its title in archives, feeds and menus, and its address in sitemaps
-- **Anything an archive template prints by itself,** such as custom fields, and comments in the site-wide comments feed
-- **WooCommerce products,** which do not offer the box, since they could still be bought. The `clu_restrictable_post_types` filter can add them
-
----
 
 ## Languages
 
@@ -247,8 +223,8 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 - **Register, Login, Password Reset, Password Lost and My Account Form** — Labels, buttons and validation texts
 - **Password Rules** — Requirements for new passwords
 - **Messages** — Texts shown to users, and the email templates
-- **User Status** — Whether some users have a status of their own next to their role, and the name of that kind of user
-- **User Roles** — Which roles count as pending and approved. Roles that can manage the site are not allowed here, since the pending role goes to anyone who fills in the public form
+- **User Status** — The name shown for the status
+- **User Roles** — Automatic approval, and creating or deleting custom roles
 - **Setup Pages** — Creates the pages
 
 ---
@@ -261,7 +237,8 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 | `clu_client_ip` | Return the real visitor IP on a site behind a proxy or CDN, where `REMOTE_ADDR` is the proxy |
 | `clu_approval_link_lifetime` | Seconds an approval link stays valid |
 | `clu_user_is_pending` | Decide whether a user counts as waiting for approval |
-| `clu_privileged_capabilities` | The capabilities that disqualify a role from being pending or approved |
+| `clu_privileged_capabilities` | The capabilities that disqualify the site's default role from going to public sign-ups (Subscriber is used instead) |
+| `clu_registration_role` | The role of a new user. Receives the default role of the site |
 | `clu_send_rejection_email` | Return false to reject users without emailing them. Receives the user |
 | `clu_send_received_email` | Decide whether a user gets the registration received email. Receives the Mail tab setting and the user |
 | `clu_email_confirm_lifetime` | Seconds a link that confirms an email address stays valid |
@@ -269,8 +246,6 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 | `clu_second_step_url` | Where a user's second login step takes place, for a two-factor plugin other than Two Factor. Receives the address, the user and where to go after; '' means none |
 | `clu_template_path` | The file a form is rendered from. Receives the path and the template name, such as `form_login` |
 | `clu_region_countries` | The regions and countries of the Region and Country fields |
-| `clu_user_can_view_restricted` | Decide who sees restricted content, for example to let in a role that was on the site before the approval flow. Receives the answer, the user and the post ID, which is 0 for restricted content in general |
-| `clu_restrictable_post_types` | The post types that offer the Access box |
 
 The action `clu_decision_mail_failed` fires when an approval or rejection email could not be sent. The action `clu_user_status_changed` fires after a user's [status](#user-status) changed, with the user ID, the new status and the old one.
 
@@ -298,6 +273,21 @@ php tests/run-tests.php /path/to/wp-load.php --bare
 ---
 
 ## Changelog
+
+### 2.0.0
+
+The first version of the Coweb line, in its own folder `coweb-custom-login-users`. Sites on 1.9 or earlier are not meant to update to it without a look at what goes away.
+
+Changed
+
+- **Where a registration stands is a status, not a role.** A new user gets the default role of the site and the status Pending (or Email not confirmed). Approving and rejecting are the status links on the Users list and the status field on the user's screen. The **Role Assignments** settings are gone, and the User Status tab no longer has an on/off switch.
+- On update, whoever held the Pending User, Approved User, Rejected User or Unconfirmed User role gets the matching status and the default role of the site, and the four roles are removed. A site that had chosen other roles as pending or approved keeps those roles on its users, who get the status next to them.
+
+Removed
+
+- **Every kind of blocking.** Pending, rejected and unconfirmed users are no longer stopped from logging in or resetting a password, their sessions are not ended, the admin bar and wp-admin are no longer closed to them. A site that wants any of it does it in its theme; see [User Approval Workflow](#user-approval-workflow).
+- **Restricted content**: the Access box, the `[clu_approved_only]` shortcode, the page for users without access and the two messages. Pages that were restricted are open once this version is active. The `_clu_restricted` mark stays on them, so a theme can go by it.
+- `clu_get_role_slug()`, `clu_decide_user()`, `clu_blocked_account_message()` (now `clu_account_state_message()`), `clu_user_can_view_restricted()` and the filters of restricted content.
 
 ### 1.9.0
 

@@ -3,28 +3,27 @@
 defined( 'ABSPATH' ) || exit;
 
 /*
- * A status kept on the user, next to their role and without changing it.
+ * A status kept on the user, next to their role and without changing it: unconfirmed,
+ * pending, approved, rejected, or none.
  *
- * For a site where some users are a kind of their own, such as business customers or
- * members, that an admin approves, while everyone keeps the role they have. The name of
- * that kind is a setting. Off by default: a site that does not turn it on sees nothing
- * of it, and the approval of new registrations through roles works as it always did.
+ * It is how the plugin knows where a registration stands, and a site can also use it
+ * for a kind of user that an admin approves, such as business customers. The name shown
+ * for it is a setting.
  *
- * A status does not stop anyone from logging in and sends no email. It opens restricted
- * content to the approved, and other code can ask for it or listen to its changes.
+ * A status stops nobody from logging in and hides no content: a site that wants that
+ * does it in its theme. Emails follow it only for users who signed up through the
+ * plugin (see approvals.php). Other code can ask for it or listen to its changes.
  */
 
 /* ─── Settings and reading ───────────────────────────────────────────── */
 
 /**
- * Tells whether the site uses the status.
+ * Tells whether the status is in use. Always, since 2.0; other code may still ask.
  *
  * @return bool
  */
 function clu_status_is_on() {
-    $options = get_option( 'clu_user_status' );
-
-    return is_array( $options ) && ( $options['enabled'] ?? '' ) === '1';
+    return (bool) apply_filters( 'clu_status_is_on', true );
 }
 
 /**
@@ -46,7 +45,8 @@ function clu_status_label() {
  */
 function clu_status_names() {
     return [
-        ''         => __( 'None', 'custom-login-users' ),
+        ''            => __( 'None', 'custom-login-users' ),
+        'unconfirmed' => __( 'Email not confirmed', 'custom-login-users' ),
         'pending'  => __( 'Pending', 'custom-login-users' ),
         'approved' => __( 'Approved', 'custom-login-users' ),
         'rejected' => __( 'Rejected', 'custom-login-users' ),
@@ -54,8 +54,7 @@ function clu_status_names() {
 }
 
 /**
- * Returns a user's status: pending, approved, rejected, or '' for none. Always '' while
- * the site does not use the status, whatever was saved before.
+ * Returns a user's status: unconfirmed, pending, approved, rejected, or '' for none.
  *
  * @param int $user_id
  * @return string
@@ -84,9 +83,8 @@ function clu_user_status_is_approved( $user_id ) {
  * Sets a user's status. The role is not touched.
  *
  * @param int    $user_id
- * @param string $status pending, approved, rejected, or '' to remove it.
- * @return bool False when the site does not use the status, or the user or the status
- *              does not exist.
+ * @param string $status unconfirmed, pending, approved, rejected, or '' to remove it.
+ * @return bool False when the user or the status does not exist.
  */
 function clu_set_user_status( $user_id, $status ) {
     $user_id = (int) $user_id;
@@ -185,6 +183,11 @@ function clu_status_actions_for( $status ) {
 
     if ( $status === 'rejected' ) {
         return [ 'approve' => 'approved', 'remove' => '' ];
+    }
+
+    // An admin who knows them may let them in; Delete removes the ones nobody confirmed.
+    if ( $status === 'unconfirmed' ) {
+        return [ 'approve' => 'approved' ];
     }
 
     return $status === 'approved' ? [ 'remove' => '' ] : [];
@@ -292,6 +295,13 @@ function clu_handle_status_actions() {
     $user_ids = isset( $_REQUEST['users'] ) ? array_unique( array_map( 'intval', (array) $_REQUEST['users'] ) ) : [];
     $done     = 0;
     $skipped  = 0;
+    $failed   = 0;
+    $watch    = function () use ( &$failed ) {
+        $failed++;
+    };
+
+    // The email of an approval or a rejection, for a user who signed up through the plugin.
+    add_action( 'clu_decision_mail_failed', $watch );
 
     foreach ( $user_ids as $user_id ) {
         // A bulk action may name any status: only a change that changes something counts.
@@ -302,9 +312,11 @@ function clu_handle_status_actions() {
         }
     }
 
+    remove_action( 'clu_decision_mail_failed', $watch );
+
     $back = remove_query_arg( clu_status_query_args(), wp_get_referer() ?: admin_url( 'users.php' ) );
 
-    wp_safe_redirect( add_query_arg( [ 'clu_status_done' => $done, 'clu_status_skipped' => $skipped ], $back ) );
+    wp_safe_redirect( add_query_arg( [ 'clu_status_done' => $done, 'clu_status_skipped' => $skipped, 'clu_mail_failed' => $failed ], $back ) );
     exit;
 }
 
@@ -314,7 +326,7 @@ function clu_handle_status_actions() {
  * @return string[]
  */
 function clu_status_query_args() {
-    return [ 'clu_status_done', 'clu_status_skipped' ];
+    return [ 'clu_status_done', 'clu_status_skipped', 'clu_mail_failed' ];
 }
 
 add_filter( 'removable_query_args', 'clu_status_removable_query_args' );
@@ -337,10 +349,16 @@ function clu_show_status_notices() {
     // Counted first: the tools that collect texts for translation skip a call as the count.
     $done    = $count( 'clu_status_done' );
     $skipped = $count( 'clu_status_skipped' );
+    $failed  = $count( 'clu_mail_failed' );
 
     if ( $done ) {
         /* translators: %d: number of users. */
         printf( '<div class="notice notice-success is-dismissible"><p>%s</p></div>', esc_html( sprintf( _n( 'The status of %d user was updated.', 'The status of %d users was updated.', $done, 'custom-login-users' ), $done ) ) );
+    }
+
+    if ( $failed ) {
+        /* translators: %d: number of users. */
+        printf( '<div class="notice notice-error is-dismissible"><p>%s</p></div>', esc_html( sprintf( _n( 'The email to %d user could not be sent, so they do not know about the decision yet.', 'The emails to %d users could not be sent, so they do not know about the decision yet.', $failed, 'custom-login-users' ), $failed ) ) );
     }
 
     if ( $skipped ) {

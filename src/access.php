@@ -2,6 +2,16 @@
 
 defined( 'ABSPATH' ) || exit;
 
+/*
+ * Where a registration stands, for the plugin and for the site's own code.
+ *
+ * Since 2.0 the plugin stops nobody: a user whose registration is pending, rejected or
+ * not confirmed can log in, reset a password and open wp-admin as far as their role
+ * allows, and no content is hidden. A site that wants any of that does it in its theme,
+ * with these functions and clu_get_user_status(), for example on the `authenticate` and
+ * `allow_password_reset` filters.
+ */
+
 /**
  * Tells whether a user is still waiting for approval.
  *
@@ -9,20 +19,13 @@ defined( 'ABSPATH' ) || exit;
  * @return bool
  */
 function clu_user_is_pending( $user ) {
-    if ( ! $user instanceof WP_User || ! $user->exists() ) {
-        return false;
-    }
-
-    $roles   = (array) $user->roles;
-    $pending = in_array( clu_get_role_slug( 'pending_role' ), $roles, true )
-        && ! in_array( clu_get_role_slug( 'approved_role' ), $roles, true )
-        && ! user_can( $user, 'manage_options' );
+    $pending = $user instanceof WP_User && $user->exists() && clu_get_user_status( $user->ID ) === 'pending';
 
     /**
      * Filters whether a user counts as waiting for approval.
      *
-     * @param bool    $pending
-     * @param WP_User $user
+     * @param bool  $pending
+     * @param mixed $user
      */
     return (bool) apply_filters( 'clu_user_is_pending', $pending, $user );
 }
@@ -34,15 +37,7 @@ function clu_user_is_pending( $user ) {
  * @return bool
  */
 function clu_user_is_rejected( $user ) {
-    if ( ! $user instanceof WP_User || ! $user->exists() ) {
-        return false;
-    }
-
-    $roles = (array) $user->roles;
-
-    return in_array( clu_get_role_slug( 'rejected_role' ), $roles, true )
-        && ! in_array( clu_get_role_slug( 'approved_role' ), $roles, true )
-        && ! user_can( $user, 'manage_options' );
+    return $user instanceof WP_User && $user->exists() && clu_get_user_status( $user->ID ) === 'rejected';
 }
 
 /**
@@ -53,24 +48,17 @@ function clu_user_is_rejected( $user ) {
  * @return bool
  */
 function clu_user_is_unconfirmed( $user ) {
-    if ( ! $user instanceof WP_User || ! $user->exists() ) {
-        return false;
-    }
-
-    $roles = (array) $user->roles;
-
-    return in_array( clu_get_role_slug( 'unconfirmed_role' ), $roles, true )
-        && ! in_array( clu_get_role_slug( 'approved_role' ), $roles, true )
-        && ! user_can( $user, 'manage_options' );
+    return $user instanceof WP_User && $user->exists() && clu_get_user_status( $user->ID ) === 'unconfirmed';
 }
 
 /**
- * Returns the message for an account that may not log in or reset its password.
+ * Returns the key of the message that says where an account stands, for a theme that
+ * turns such accounts away: clu_render_message() gives the text.
  *
  * @param mixed $user
- * @return string Message key, or '' when the account is free to.
+ * @return string account_rejected, account_unconfirmed, account_pending, or '' for any other account.
  */
-function clu_blocked_account_message( $user ) {
+function clu_account_state_message( $user ) {
     if ( clu_user_is_rejected( $user ) ) {
         return 'account_rejected';
     }
@@ -83,32 +71,41 @@ function clu_blocked_account_message( $user ) {
 }
 
 /**
- * Stops a pending, unconfirmed or rejected user from logging in, through any login form
- * on the site.
+ * Tells whether a user signed up through the plugin, so that its emails follow their
+ * status. Someone whose status was set for another reason gets none of them.
  *
- * Runs late, so the account's status is only revealed to someone who already
- * passed the password check.
+ * @param int $user_id
+ * @return bool
  */
-add_filter( 'authenticate', 'clu_block_pending_login', 99 );
-function clu_block_pending_login( $user ) {
-    $message = clu_blocked_account_message( $user );
-
-    return $message !== '' ? new WP_Error( 'clu_' . $message, clu_render_message( $message ) ) : $user;
+function clu_user_signed_up_here( $user_id ) {
+    return (string) get_user_meta( (int) $user_id, 'clu_signup', true ) !== '';
 }
 
 /**
- * Stops a pending, unconfirmed or rejected user from getting a reset key, which would
- * also be a way to log in without approval.
+ * Starts the approval of a new account: asks it to confirm its address first if the site
+ * wants that, otherwise marks it pending and tells the admin (or approves it at once
+ * with automatic approval).
+ *
+ * @param WP_User $user
+ * @return bool False only when the confirmation email could not be sent.
  */
-add_filter( 'allow_password_reset', 'clu_block_pending_password_reset', 10, 2 );
-function clu_block_pending_password_reset( $allow, $user_id ) {
-    return clu_blocked_account_message( get_userdata( $user_id ) ) !== '' ? false : $allow;
+function clu_start_registration( $user ) {
+    update_user_meta( $user->ID, 'clu_signup', time() );
+
+    if ( clu_email_confirmation_is_on() ) {
+        return clu_ask_to_confirm_email( $user );
+    }
+
+    clu_set_user_status( $user->ID, 'pending' );
+    clu_send_registration_emails( get_userdata( $user->ID ) );
+
+    return true;
 }
 
 /**
  * Sends sign-ups from the form built into WordPress through approval too. On a site that
  * takes registrations that form is always there at wp-login.php?action=register, and it
- * would create a working account in the default role that no admin hears about.
+ * would create an account that no admin hears about.
  */
 add_action( 'register_new_user', 'clu_send_core_signup_to_approval', 1 );
 function clu_send_core_signup_to_approval( $user_id ) {
@@ -118,56 +115,12 @@ function clu_send_core_signup_to_approval( $user_id ) {
         return;
     }
 
-    // Its emails would tell the user to choose a password, which pending users cannot.
+    // Its emails would tell the user to choose a password; the approval email does that.
     remove_action( 'register_new_user', 'wp_send_new_user_notifications' );
 
-    // A pending role set as the site's default role was already dealt with on user_register.
-    if ( clu_user_is_pending( $user ) || clu_user_is_unconfirmed( $user ) ) {
+    if ( clu_get_user_status( $user->ID ) !== '' ) {
         return;
     }
 
-    if ( clu_email_confirmation_is_on() ) {
-        clu_ask_to_confirm_email( $user );
-        return;
-    }
-
-    $user->set_role( clu_get_registration_role() );
-    clu_send_registration_emails( get_userdata( $user_id ) );
-}
-
-/**
- * Tells whether the current user is limited to the front end of the site.
- *
- * @return bool
- */
-function clu_current_user_is_front_end_only() {
-    $user = wp_get_current_user();
-
-    if ( ! $user->exists() || user_can( $user, 'manage_options' ) ) {
-        return false;
-    }
-
-    return (bool) array_intersect(
-        [ clu_get_role_slug( 'pending_role' ), clu_get_role_slug( 'approved_role' ), clu_get_role_slug( 'rejected_role' ), clu_get_role_slug( 'unconfirmed_role' ) ],
-        (array) $user->roles
-    );
-}
-
-add_filter( 'show_admin_bar', 'clu_hide_admin_bar' );
-function clu_hide_admin_bar( $show ) {
-    return clu_current_user_is_front_end_only() ? false : $show;
-}
-
-add_action( 'admin_init', 'clu_restrict_dashboard_access' );
-function clu_restrict_dashboard_access() {
-    global $pagenow;
-
-    if ( wp_doing_ajax() || $pagenow === 'admin-post.php' ) {
-        return;
-    }
-
-    if ( clu_current_user_is_front_end_only() ) {
-        wp_safe_redirect( home_url( '/' ) );
-        exit;
-    }
+    clu_start_registration( $user );
 }

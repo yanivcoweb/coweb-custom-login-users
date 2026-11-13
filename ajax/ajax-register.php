@@ -61,10 +61,6 @@ function clu_handle_ajax_register() {
         wp_send_json_success( [ 'message' => clu_render_message( 'register_confirm_sent' ) ] );
     }
 
-    if ( $confirm ) {
-        clu_add_unconfirmed_role();
-    }
-
     // Saved before anything else hears about the new user, because the email to the
     // admin lists these values.
     $save_values = function ( $user_id ) use ( $values ) {
@@ -81,9 +77,8 @@ function clu_handle_ajax_register() {
         'first_name' => $first_name,
         'last_name'  => $last_name,
         'nickname'   => trim( $first_name . ' ' . $last_name ),
-        // Not pending yet when the address has to be confirmed first, so that nobody
-        // hears about the registration before then.
-        'role'       => $confirm ? clu_get_role_slug( 'unconfirmed_role' ) : clu_get_registration_role(),
+        // Where the registration stands is a status, set right below.
+        'role'       => clu_get_registration_role(),
     ] ) );
 
     remove_action( 'user_register', $save_values, 1 );
@@ -92,8 +87,10 @@ function clu_handle_ajax_register() {
         wp_send_json_error( [ 'message' => wp_kses_post( $user_id->get_error_message() ) ] );
     }
 
-    // The account stays, so sending the form again later sends a new link.
-    if ( $confirm && ! clu_send_confirmation_email( get_userdata( $user_id ) ) ) {
+    // Not pending yet when the address has to be confirmed first, so that nobody hears
+    // about the registration before then. The account stays, so sending the form again
+    // later sends a new link.
+    if ( ! clu_start_registration( get_userdata( $user_id ) ) ) {
         wp_send_json_error( [ 'message' => clu_render_message( 'confirm_email_send_failed' ) ] );
     }
 
