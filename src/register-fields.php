@@ -155,14 +155,39 @@ function clu_get_register_fields() {
 }
 
 /**
- * Returns the fields of the register form.
+ * Returns the fields of a register form.
  *
- * @return array[]
+ * The main form has the fields turned on on the Register Fields tab. Another form has
+ * its own choice of them, and says for each one whether it must be filled in; the
+ * email is on every form.
+ *
+ * @param string $form_id Form id; the main form when left out.
+ * @return array[] Empty when there is no such form.
  */
-function clu_get_register_form_fields() {
-    return array_values( array_filter( clu_get_register_fields(), function ( $field ) {
-        return $field['enabled'];
-    } ) );
+function clu_get_register_form_fields( $form_id = 'main' ) {
+    $form = clu_get_register_form( $form_id );
+
+    if ( ! $form ) {
+        return [];
+    }
+
+    if ( $form['id'] === 'main' ) {
+        return array_values( array_filter( clu_get_register_fields(), function ( $field ) {
+            return $field['enabled'];
+        } ) );
+    }
+
+    $fields = [];
+
+    foreach ( clu_get_register_fields() as $field ) {
+        if ( $field['key'] === 'email' ) {
+            $fields[] = array_merge( $field, [ 'enabled' => true, 'required' => true ] );
+        } elseif ( isset( $form['fields'][ $field['key'] ] ) ) {
+            $fields[] = array_merge( $field, [ 'enabled' => true, 'required' => $form['fields'][ $field['key'] ] === 'required' ] );
+        }
+    }
+
+    return $fields;
 }
 
 /**
@@ -387,6 +412,17 @@ function clu_read_posted_fields( $fields, $user_id = 0 ) {
 
     foreach ( $fields as $field ) {
         $value = clu_read_posted_field( $field, $region );
+
+        /**
+         * Filters a value read from a form, for a site with rules of its own, such as
+         * the number of digits in a company number.
+         *
+         * @param string|null $value   The clean value, '' when left empty, null when not valid.
+         *                             Return null to refuse it.
+         * @param array       $field
+         * @param int         $user_id The user editing their account; 0 on a register form.
+         */
+        $value = apply_filters( 'clu_posted_field_value', $value, $field, $user_id );
 
         if ( $value === null && $user_id && clu_post_text( $field['key'] ) === clu_get_user_field_value( get_userdata( $user_id ), $field ) ) {
             $value = clu_post_text( $field['key'] );

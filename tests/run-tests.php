@@ -259,7 +259,7 @@ function approved_role() { return 'approved_user'; }
 function reset_state() {
     wp_set_current_user( 0 );
     $GLOBALS['clu_mails'] = [];
-    foreach ( [ 'clu_mail', 'clu_messages', 'clu_password_rules', 'clu_pages_url', 'clu_roles', 'clu_register_fields', 'clu_register_form', 'clu_login_form', 'clu_pending_count', 'clu_replace_wp_login', 'clu_security', 'clu_auto_approve', 'clu_user_status' ] as $o ) {
+    foreach ( [ 'clu_mail', 'clu_messages', 'clu_password_rules', 'clu_pages_url', 'clu_roles', 'clu_register_fields', 'clu_register_forms', 'clu_register_form', 'clu_login_form', 'clu_pending_count', 'clu_replace_wp_login', 'clu_security', 'clu_auto_approve', 'clu_user_status' ] as $o ) {
         delete_option( $o );
     }
     delete_transient( 'clu_pending_count' );
@@ -2281,6 +2281,142 @@ section( '27. The status on the user, next to the role' );
 }
 
 reset_state();
+section( '27b. Several register forms, each with a role' );
+reset_state();
+add_role( 'clu_test_business', 'Test business', [ 'read' => true ] );
+add_role( 'clu_test_boss', 'Test boss', [ 'read' => true, 'edit_users' => true ] );
+$save_forms = function ( $forms, $user = CLU_TEST_ADMIN, $nonce = null ) {
+    return ajax( 'clu_save_register_forms', [
+        'action' => 'clu_save_register_forms',
+        'nonce'  => $nonce === null ? ( wp_set_current_user( $user ) ? nonce_for( 'clu_register_forms_nonce' ) : '' ) : $nonce,
+        'forms'  => wp_json_encode( $forms ),
+    ], $user );
+};
+t( 'a new site has the main form only', array_keys( clu_get_register_forms() ) === [ 'main' ] );
+t( 'the main form gives the default role of the site', clu_register_form_role( clu_get_register_form( '' ) ) === clu_get_registration_role() );
+t( 'the main form has the fields of the Register Fields tab', clu_get_register_form_fields() === clu_get_register_form_fields( 'main' ) && count( clu_get_register_form_fields() ) === 7 );
+
+update_option( 'clu_register_fields', array_merge( clu_get_register_fields(), [ [ 'key' => 'clu_field_vat', 'label' => 'VAT number', 'type' => 'text', 'enabled' => false, 'required' => true, 'account' => false, 'placeholder' => '', 'options' => [] ] ] ) );
+$res = $save_forms( [
+    [ 'id' => 'main', 'role' => '' ],
+    [ 'id' => '', 'name' => 'Business customers', 'role' => 'clu_test_business', 'title' => 'Open a business account', 'button' => 'Send', 'fields' => [ 'first_name' => 'required', 'company' => 'required', 'clu_field_vat' => 'optional', 'email' => 'optional', 'wp_capabilities' => 'required' ] ],
+] );
+$biz = clu_get_register_form( 'business-customers' );
+t( 'an admin saves a second form', ! empty( $res['success'] ) && $biz && ( $res['data']['ids'] ?? null ) === [ 'business-customers' ], msg( $res ) );
+t( '...with its role, title and button text', $biz && $biz['role'] === 'clu_test_business' && $biz['title'] === 'Open a business account' && $biz['button'] === 'Send' );
+t( '...and only fields from the field list', $biz && array_keys( $biz['fields'] ) === [ 'first_name', 'company', 'clu_field_vat' ] );
+$keys = array_column( clu_get_register_form_fields( 'business-customers' ), 'required', 'key' );
+t( 'the form has its own fields, in the order of the field list, and always the email', $keys === [ 'first_name' => true, 'email' => true, 'company' => true, 'clu_field_vat' => false ], wp_json_encode( $keys ) );
+t( 'the main form keeps its own fields', ! in_array( 'clu_field_vat', array_column( clu_get_register_form_fields(), 'key' ), true ) );
+t( 'a form that does not exist has no fields', clu_get_register_form( 'nope' ) === null && clu_get_register_form_fields( 'nope' ) === [] );
+
+$res = $save_forms( [ [ 'id' => 'business-customers', 'name' => 'Businesses', 'role' => 'clu_test_business', 'fields' => [ 'first_name' => 'required', 'company' => 'required', 'clu_field_vat' => 'optional' ] ], [ 'id' => 'business-customers', 'name' => 'Businesses', 'role' => '' ], [ 'id' => 'main', 'name' => 'x', 'role' => '' ], [ 'id' => 'made-up', 'name' => 'לקוחות', 'role' => '' ] ] );
+t( 'renaming a form keeps its id; a new form never takes an id from the request, or one in use', ! empty( $res['success'] ) && array_keys( clu_get_register_forms() ) === [ 'main', 'business-customers', 'businesses', 'form' ] && clu_get_register_form( 'business-customers' )['name'] === 'Businesses', wp_json_encode( array_keys( clu_get_register_forms() ) ) );
+$before = get_option( 'clu_register_forms' );
+$res = $save_forms( [ [ 'id' => '', 'name' => 'Bosses', 'role' => 'clu_test_boss' ] ] );
+t( 'a role that can manage users is refused for a form', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before, msg( $res ) );
+$res = $save_forms( [ [ 'id' => '', 'name' => 'Admins', 'role' => 'administrator' ] ] );
+t( '...and so is the administrator role', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before );
+$res = $save_forms( [ [ 'id' => '', 'name' => 'Ghosts', 'role' => 'no_such_role' ] ] );
+t( '...and a role that does not exist', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before );
+$res = $save_forms( [ [ 'id' => '', 'name' => '  ', 'role' => '' ] ] );
+t( 'a form needs a name', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before );
+$sub = make_user( 'clu_forms_sub', 'clu-forms-sub@example.test', 'Str0ng!Passw0rd', 'subscriber' );
+$res = $save_forms( [ [ 'id' => 'main', 'role' => 'clu_test_business' ] ], $sub );
+t( 'a subscriber cannot save the forms', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before );
+$res = $save_forms( [ [ 'id' => 'main', 'role' => 'clu_test_business' ] ], CLU_TEST_ADMIN, 'bad' );
+t( 'the forms are not saved without a valid nonce', empty( $res['success'] ) && get_option( 'clu_register_forms' ) === $before );
+$save_forms( [ [ 'id' => 'business-customers', 'name' => 'Businesses', 'role' => 'clu_test_business', 'title' => 'Open a business account', 'button' => 'Send', 'fields' => [ 'first_name' => 'required', 'company' => 'required', 'clu_field_vat' => 'optional' ] ] ] );
+t( 'a form left out of what is saved is removed', array_keys( clu_get_register_forms() ) === [ 'main', 'business-customers' ] );
+
+wp_set_current_user( 0 );
+$html = render_shortcode_safe( '[clu_register_form form="business-customers" show_title="true"]' );
+t( 'the shortcode shows the form by its id', strpos( $html, 'name="clu_form" value="business-customers"' ) !== false && strpos( $html, 'EXCEPTION' ) === false, substr( $html, 0, 200 ) );
+t( '...with its own title and button text', strpos( $html, '<h3>Open a business account</h3>' ) !== false && strpos( $html, 'value="Send"' ) !== false );
+t( '...and its own fields only', strpos( $html, 'name="clu_field_vat"' ) !== false && strpos( $html, 'name="company"' ) !== false && strpos( $html, 'name="last_name"' ) === false && strpos( $html, 'name="country"' ) === false );
+t( '...where an optional field is not marked required', (bool) preg_match( '/name="company"[^>]*custom-required/', $html ) && ! preg_match( '/name="clu_field_vat"[^>]*custom-required/', $html ) );
+$html = render_shortcode_safe( $SC_REG );
+t( 'the shortcode without a form shows the main form', strpos( $html, 'name="clu_form" value="main"' ) !== false && strpos( $html, 'name="last_name"' ) !== false && strpos( $html, 'name="clu_field_vat"' ) === false );
+t( 'a guest sees nothing where a form was removed', render_shortcode_safe( '[clu_register_form form="nope"]' ) === '' );
+wp_set_current_user( CLU_TEST_ADMIN );
+t( '...and an admin, who is logged in, sees the usual line', strpos( render_shortcode_safe( '[clu_register_form form="nope"]' ), 'signupform' ) === false );
+wp_set_current_user( 0 );
+
+$GLOBALS['clu_mails'] = [];
+$heard = [];
+$listen = function ( $user_id, $values, $form ) use ( &$heard ) {
+    $heard = [ $user_id, $values, $form['id'], clu_get_user_status( $user_id ) ];
+};
+add_action( 'clu_user_registered', $listen, 10, 3 );
+$email = 'clu-biz-form@example.test';
+$res   = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'business-customers', 'first_name' => 'Noa', 'last_name' => 'Ignored', 'email' => $email, 'company' => 'Boxes Ltd', 'clu_field_vat' => '', 'country' => 'France' ] );
+$u     = get_user_by( 'email', $email );
+t( 'signing up through the form gives its role at once', ! empty( $res['success'] ) && $u && array_values( $u->roles ) === [ 'clu_test_business' ], msg( $res ) . ( $u ? ' ' . implode( ',', $u->roles ) : '' ) );
+t( '...with the pending status, like every registration', $u && clu_get_user_status( $u->ID ) === 'pending' && clu_user_signed_up_here( $u->ID ) );
+t( '...and remembers the form', $u && get_user_meta( $u->ID, 'clu_register_form', true ) === 'business-customers' && clu_get_user_register_form( $u->ID )['name'] === 'Businesses' );
+t( 'only the fields of the form are saved', $u && get_user_meta( $u->ID, 'company', true ) === 'Boxes Ltd' && $u->last_name === '' && get_user_meta( $u->ID, 'country', true ) === '' );
+t( 'other code hears about the registration, before the status', $u && $heard && $heard[0] === $u->ID && $heard[1]['company'] === 'Boxes Ltd' && $heard[2] === 'business-customers' && $heard[3] === '' );
+remove_action( 'clu_user_registered', $listen, 10 );
+$admin_mail = $GLOBALS['clu_mails'][0]['message'] ?? '';
+t( 'the email to the admin names the form', strpos( $admin_mail, 'Registration form:</strong> Businesses' ) !== false && strpos( $admin_mail, 'Boxes Ltd' ) !== false, substr( wp_strip_all_tags( $admin_mail ), 0, 300 ) );
+if ( $u ) {
+    $GLOBALS['clu_mails'] = [];
+    clu_set_user_status( $u->ID, 'approved' );
+    t( 'approving sends the set-password email and leaves the role', count( mails_to( $email ) ) === 1 && array_values( get_userdata( $u->ID )->roles ) === [ 'clu_test_business' ] );
+}
+
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'business-customers', 'first_name' => 'Noa', 'email' => 'clu-biz-missing@example.test', 'company' => '' ] );
+t( 'a field required on the form must be filled in', empty( $res['success'] ) && ! email_exists( 'clu-biz-missing@example.test' ), msg( $res ) );
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'nope', 'first_name' => 'Noa', 'last_name' => 'L', 'email' => 'clu-biz-nope@example.test', 'company' => 'X' ] );
+t( 'a form that does not exist registers nobody', empty( $res['success'] ) && ! email_exists( 'clu-biz-nope@example.test' ), msg( $res ) );
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => [ 'business-customers' ], 'first_name' => 'Noa', 'last_name' => 'L', 'email' => 'clu-biz-array@example.test', 'company' => 'Acme', 'customer_type' => 'Distributor', 'region' => 'Europe', 'country' => 'France' ] );
+$u   = get_user_by( 'email', 'clu-biz-array@example.test' );
+t( 'a form id that is not text means the main form', ! empty( $res['success'] ) && $u && get_user_meta( $u->ID, 'clu_register_form', true ) === 'main' && array_values( $u->roles ) === [ clu_get_registration_role() ], msg( $res ) );
+$email = 'clu-main-form@example.test';
+$res   = register( [ 'email' => $email ] );
+$u     = get_user_by( 'email', $email );
+t( 'the main form still gives the default role', ! empty( $res['success'] ) && $u && array_values( $u->roles ) === [ clu_get_registration_role() ] && get_user_meta( $u->ID, 'clu_register_form', true ) === 'main' );
+
+$refuse = function ( $value, $field ) {
+    return $field['key'] === 'clu_field_vat' && $value !== '' && ! preg_match( '/^\d{9}$/', $value ) ? null : $value;
+};
+add_filter( 'clu_posted_field_value', $refuse, 10, 2 );
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'business-customers', 'first_name' => 'Noa', 'email' => 'clu-biz-vat@example.test', 'company' => 'Boxes Ltd', 'clu_field_vat' => '12ab' ] );
+t( 'a site can refuse a value with a rule of its own', empty( $res['success'] ) && strpos( msg( $res ), 'VAT number' ) !== false && ! email_exists( 'clu-biz-vat@example.test' ), msg( $res ) );
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'business-customers', 'first_name' => 'Noa', 'email' => 'clu-biz-vat@example.test', 'company' => 'Boxes Ltd', 'clu_field_vat' => '123456789' ] );
+$u   = get_user_by( 'email', 'clu-biz-vat@example.test' );
+t( '...and accept one that fits it', ! empty( $res['success'] ) && $u && get_user_meta( $u->ID, 'clu_field_vat', true ) === '123456789', msg( $res ) );
+remove_filter( 'clu_posted_field_value', $refuse, 10 );
+
+// A role that became powerful, or was deleted, after it was chosen.
+get_role( 'clu_test_business' )->add_cap( 'edit_users' );
+$res = ajax( 'ajax_register_user', [ 'action' => 'ajax_register_user', 'register_nonce' => nonce_for( 'register_form_nonce' ), 'clu_form' => 'business-customers', 'first_name' => 'Noa', 'email' => 'clu-biz-cap@example.test', 'company' => 'Boxes Ltd' ] );
+$u   = get_user_by( 'email', 'clu-biz-cap@example.test' );
+t( 'a role that gained the power to manage users is no longer handed out', ! empty( $res['success'] ) && $u && array_values( $u->roles ) === [ clu_get_registration_role() ], $u ? implode( ',', $u->roles ) : msg( $res ) );
+get_role( 'clu_test_business' )->remove_cap( 'edit_users' );
+$force = function () { return 'administrator'; };
+add_filter( 'clu_register_form_role', $force );
+t( 'a filter cannot make a form hand out a powerful role either', clu_register_form_role( clu_get_register_form( 'business-customers' ) ) === clu_get_registration_role() );
+remove_filter( 'clu_register_form_role', $force );
+$res = ajax( 'clu_delete_role', [ 'action' => 'clu_delete_role', 'nonce' => ( wp_set_current_user( CLU_TEST_ADMIN ) ? nonce_for( 'clu_roles_nonce' ) : '' ), 'role_slug' => 'clu_test_boss' ], CLU_TEST_ADMIN );
+t( 'a role no form uses can be deleted', ! empty( $res['success'] ) && ! get_role( 'clu_test_boss' ), msg( $res ) );
+foreach ( get_users( [ 'role' => 'clu_test_business', 'fields' => 'ID' ] ) as $uid ) {
+    get_userdata( $uid )->set_role( 'subscriber' );
+}
+$res = ajax( 'clu_delete_role', [ 'action' => 'clu_delete_role', 'nonce' => ( wp_set_current_user( CLU_TEST_ADMIN ) ? nonce_for( 'clu_roles_nonce' ) : '' ), 'role_slug' => 'clu_test_business' ], CLU_TEST_ADMIN );
+t( 'the role of a form cannot be deleted', empty( $res['success'] ) && get_role( 'clu_test_business' ) && strpos( msg( $res ), 'Register Forms' ) !== false, msg( $res ) );
+remove_role( 'clu_test_business' );
+t( 'a form whose role is gone gives the default role', clu_register_form_role( clu_get_register_form( 'business-customers' ) ) === clu_get_registration_role() );
+wp_set_current_user( CLU_TEST_ADMIN );
+ob_start();
+clu_render_register_forms_tab();
+$tab = ob_get_clean();
+t( 'the settings tab lists the forms and their shortcodes', strpos( $tab, '[clu_register_form form=&quot;business-customers&quot;]' ) !== false && strpos( $tab, '[clu_register_form]' ) !== false && strpos( $tab, 'clu-form-card-template' ) !== false );
+t( '...offers no powerful role', strpos( $tab, 'value="administrator"' ) === false && strpos( $tab, 'value="subscriber"' ) !== false );
+t( '...and shows a role that can no longer be used', strpos( $tab, 'clu_test_business (cannot be used' ) !== false );
+wp_set_current_user( 0 );
+reset_state();
+
 section( '28. Nonces, templates, settings, update and uninstall' );
 {
     $res = ajax( 'clu_refresh_nonce', [ 'field' => 'login_nonce' ] );

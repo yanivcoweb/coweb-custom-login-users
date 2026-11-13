@@ -675,3 +675,9 @@ msgstr "שינוי הסטטוס לא משנה את התפקיד של המשתמ�
 #: src/user-status.php
 msgid "Email not confirmed"
 msgstr "האימייל לא אומת"
+
+msgid "Registration form"
+msgstr "טופס ההרשמה"
+
+msgid "Main form"
+msgstr "הטופס הראשי"

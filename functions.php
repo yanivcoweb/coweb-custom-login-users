@@ -330,15 +330,17 @@ function clu_form_text_defaults() {
 }
 
 /**
- * Reads the show_title shortcode attribute, so show_title="false" means false.
+ * Reads the shortcode attributes of a form: show_title, so that show_title="false" means
+ * false, and form, which names a register form.
  *
  * @param mixed $attributes Raw shortcode attributes.
  * @return array
  */
 function clu_parse_form_attributes( $attributes ) {
-    $attributes = shortcode_atts( [ 'show_title' => false ], $attributes );
+    $attributes = shortcode_atts( [ 'show_title' => false, 'form' => '' ], $attributes );
 
     $attributes['show_title'] = filter_var( $attributes['show_title'], FILTER_VALIDATE_BOOLEAN );
+    $attributes['form']       = is_string( $attributes['form'] ) ? $attributes['form'] : '';
 
     return $attributes;
 }
@@ -625,7 +627,7 @@ function clu_send_new_user_email( $user, $approved = false ) {
                     '%1$s'                 => $name,
                     '%2$s'                 => $edit_url,
                     '{display_name}'       => $name,
-                    '{user_details}'       => clu_format_user_details( clu_get_user_details( $user ) ),
+                    '{user_details}'       => clu_format_user_details( clu_get_user_form_detail( $user ) + clu_get_user_details( $user ) ),
                     '{edit_user_url}'      => $edit_url,
                     '{edit_user_link}'     => clu_message_link( $edit_url, clu_get_message( 'email_edit_user_text' ) ),
                     '{pending_users_url}'  => $list_url,

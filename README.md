@@ -35,7 +35,7 @@ The plugin adds pages next to the default ones, and `wp-login.php` keeps working
 | Shortcode | Older name, still supported | Description |
 |---|---|---|
 | `[clu_login_form]` | `[custom-login-form]` | Login form |
-| `[clu_register_form]` | `[custom-register-form]` | Registration form |
+| `[clu_register_form]` | `[custom-register-form]` | Registration form. With `form="its-id"`, another of the site's [register forms](#register-forms) |
 | `[clu_password_lost_form]` | `[custom-password-lost-form]` | "Forgot password" form |
 | `[clu_password_set_form]` | `[custom-password-set]` | Set or reset password form, opened from the emailed link |
 | `[clu_my_account]` | `[my-account]` | Profile and change-password forms |
@@ -204,6 +204,23 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 
 ---
 
+## Register Forms
+
+A site can have several register forms, for example one for private customers and one for businesses. They are made on **Settings > Custom Login Users > Register Forms**. Each form has:
+
+- **A role**, which whoever signs up through the form gets at once. Left alone, it is the default role of the site. Roles that can manage the site or its users are not offered, and are never handed out even if a role gains such a capability later
+- **Its own fields**, chosen from the list of the Register Fields tab, each one required or optional on this form. The email is on every form. A field meant only for one form is added on the Register Fields tab with "On the form" left off
+- **A title and a button text** of its own, or those of the main form when left empty
+- **A shortcode**, shown on the tab once the form is saved: `[clu_register_form form="business"]`
+
+The main form is always there: `[clu_register_form]`, with the fields turned on on the Register Fields tab. Only its role is set on this tab.
+
+Everything else is shared by all the forms: the approval, the emails, the messages, the bot check. The email to the admin says which form a registration came through, and the user keeps it as the user meta `clu_register_form`.
+
+The role is given when the form is sent, before anyone approved the user, and the plugin stops nobody from logging in. A site that gives a role prices or content of its own, and wants them only after the approval, checks the status in its theme: `clu_get_user_status( $user_id )`.
+
+---
+
 ## Installation
 
 1. Upload the plugin folder to `/wp-content/plugins/`.
@@ -220,6 +237,7 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 - **Mail** — Sender details, who hears about new registrations, and the emails to new users
 - **Login Protection** — The limit on failed logins and the bot check
 - **Register Fields** — What the register form asks for
+- **Register Forms** — More register forms, each with a role and its own choice of fields
 - **Register, Login, Password Reset, Password Lost and My Account Form** — Labels, buttons and validation texts
 - **Password Rules** — Requirements for new passwords
 - **Messages** — Texts shown to users, and the email templates
@@ -238,7 +256,9 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 | `clu_approval_link_lifetime` | Seconds an approval link stays valid |
 | `clu_user_is_pending` | Decide whether a user counts as waiting for approval |
 | `clu_privileged_capabilities` | The capabilities that disqualify the site's default role from going to public sign-ups (Subscriber is used instead) |
-| `clu_registration_role` | The role of a new user. Receives the default role of the site |
+| `clu_registration_role` | The role of a new user who signs up through a form that has no role of its own. Receives the default role of the site |
+| `clu_register_form_role` | The role a register form gives. Receives the role chosen for the form ('' for none) and the form. A role that can manage the site or its users is refused all the same |
+| `clu_posted_field_value` | A value read from a form, for a rule of the site's own, such as the number of digits in a company number. Receives the clean value, the field and the user editing their account (0 on a register form). Return null to refuse the value |
 | `clu_send_rejection_email` | Return false to reject users without emailing them. Receives the user |
 | `clu_send_received_email` | Decide whether a user gets the registration received email. Receives the Mail tab setting and the user |
 | `clu_email_confirm_lifetime` | Seconds a link that confirms an email address stays valid |
@@ -247,7 +267,7 @@ Custom fields can be text, long text, phone, number, web address, dropdown or ch
 | `clu_template_path` | The file a form is rendered from. Receives the path and the template name, such as `form_login` |
 | `clu_region_countries` | The regions and countries of the Region and Country fields |
 
-The action `clu_decision_mail_failed` fires when an approval or rejection email could not be sent. The action `clu_user_status_changed` fires after a user's [status](#user-status) changed, with the user ID, the new status and the old one.
+The action `clu_user_registered` fires when someone signed up through a register form, before any email about it, with the user ID, the values the form sent and the form. The action `clu_decision_mail_failed` fires when an approval or rejection email could not be sent. The action `clu_user_status_changed` fires after a user's [status](#user-status) changed, with the user ID, the new status and the old one.
 
 ---
 
@@ -273,6 +293,18 @@ php tests/run-tests.php /path/to/wp-load.php --bare
 ---
 
 ## Changelog
+
+### 2.1.0
+
+Added
+
+- **Several register forms, each with a role.** The new Register Forms tab makes more forms next to the main one. Each has a role that new users get at once, its own choice of the fields of the Register Fields tab, its own title and button text, and a shortcode: `[clu_register_form form="its-id"]`. See [Register Forms](#register-forms).
+- The main form can be given a role too, instead of the default role of the site.
+- The email to the admin says which form a registration came through, on a site with more than one form.
+- The filters `clu_register_form_role` and `clu_posted_field_value`, and the action `clu_user_registered`.
+- A role that a register form gives cannot be deleted on the User Roles tab.
+
+Nothing changes on a site that makes no second form.
 
 ### 2.0.0
 

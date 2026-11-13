@@ -3,7 +3,7 @@
  * Plugin Name:       Coweb Custom Login Users
  * Plugin URI:        https://github.com/yanivcoweb/custom-login-user
  * Description:       Front-end login, registration, password and account pages, with an admin approval step for new users.
- * Version:           2.0.0
+ * Version:           2.1.0
  * Requires at least: 5.0
  * Requires PHP:      7.4
  * Author:            Yaniv Sasson
@@ -14,7 +14,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CLU_VERSION', '2.0.0' );
+define( 'CLU_VERSION', '2.1.0' );
 define( 'CLU_PLUGIN_FILE', __FILE__ );
 define( 'CLU_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CLU_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -29,6 +29,7 @@ $clu_includes = [
     'src/approvals.php',
     'src/user-status.php',
     'src/register-fields.php',
+    'src/register-forms.php',
     'src/login-replacement.php',
     'src/email-confirmation.php',
     'src/login-protection.php',
@@ -46,6 +47,7 @@ $clu_includes = [
     'ajax/ajax-login.php',
     'ajax/ajax-register.php',
     'ajax/ajax-register-fields.php',
+    'ajax/ajax-register-forms.php',
     'ajax/ajax-login-replacement.php',
     'ajax/ajax-create-pages.php',
     'ajax/ajax-roles.php',

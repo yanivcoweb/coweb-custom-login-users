@@ -14,6 +14,7 @@ $clu_options = [
     'clu_mail',
     'clu_register_form',
     'clu_register_fields',
+    'clu_register_forms',
     'clu_replace_wp_login',
     'clu_security',
     'clu_auto_approve',
@@ -35,7 +36,7 @@ foreach ( $clu_options as $clu_option ) {
 delete_transient( 'clu_pending_count' );
 delete_transient( 'clu_captcha_problem' );
 delete_transient( 'clu_status_pending_count' );
-foreach ( [ 'clu_approval_link', 'clu_email_confirm', 'clu_email_confirmed', 'clu_status', 'clu_status_changed_at', 'clu_status_changed_by', 'clu_signup' ] as $clu_meta ) {
+foreach ( [ 'clu_approval_link', 'clu_email_confirm', 'clu_email_confirmed', 'clu_status', 'clu_status_changed_at', 'clu_status_changed_by', 'clu_signup', 'clu_register_form' ] as $clu_meta ) {
     delete_metadata( 'user', 0, $clu_meta, '', true );
 }
 delete_post_meta_by_key( '_clu_restricted' );

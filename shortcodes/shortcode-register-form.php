@@ -3,7 +3,8 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders the registration form.
+ * Renders a registration form: the main one, or with form="its-id" another form of
+ * the Register Forms tab.
  *
  * @param array|string $attributes Shortcode attributes.
  * @return string
@@ -27,8 +28,18 @@ function clu_render_register_form( $attributes ) {
         return clu_render_message( 'registration_disabled' );
     }
 
-    clu_enqueue_form_assets();
-    clu_enqueue_region_script( clu_get_register_form_fields() );
+    $attributes = clu_parse_form_attributes( $attributes );
+    $form       = clu_get_register_form( sanitize_key( $attributes['form'] ) );
 
-    return clu_get_template_html( 'form_register', clu_parse_form_attributes( $attributes ) );
+    // A form removed since the page was made. Only whoever can fix it is told.
+    if ( ! $form ) {
+        return current_user_can( 'manage_options' ) ? '<p>' . esc_html( sprintf( 'Custom Login Users: there is no register form "%s". See the Register Forms tab of the settings.', $attributes['form'] ) ) . '</p>' : '';
+    }
+
+    $attributes['form'] = $form;
+
+    clu_enqueue_form_assets();
+    clu_enqueue_region_script( clu_get_register_form_fields( $form['id'] ) );
+
+    return clu_get_template_html( 'form_register', $attributes );
 }

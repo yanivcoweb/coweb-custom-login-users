@@ -27,7 +27,14 @@ function clu_handle_ajax_register() {
         wp_send_json_error( [ 'message' => clu_render_message( 'captcha_failed' ) ] );
     }
 
-    $values = clu_read_posted_fields( clu_get_register_form_fields() );
+    // The form says which fields to read and which role the new user gets.
+    $form = clu_get_register_form( sanitize_key( clu_post_text( 'clu_form' ) ) );
+
+    if ( ! $form ) {
+        wp_send_json_error( [ 'message' => clu_render_message( 'general_error' ) ] );
+    }
+
+    $values = clu_read_posted_fields( clu_get_register_form_fields( $form['id'] ) );
 
     if ( is_wp_error( $values ) ) {
         wp_send_json_error( [ 'message' => clu_field_error_message( $values, 'register_required_fields' ) ] );
@@ -63,8 +70,9 @@ function clu_handle_ajax_register() {
 
     // Saved before anything else hears about the new user, because the email to the
     // admin lists these values.
-    $save_values = function ( $user_id ) use ( $values ) {
+    $save_values = function ( $user_id ) use ( $values, $form ) {
         clu_save_user_field_values( $user_id, $values );
+        update_user_meta( $user_id, 'clu_register_form', $form['id'] );
     };
 
     add_action( 'user_register', $save_values, 1 );
@@ -77,8 +85,8 @@ function clu_handle_ajax_register() {
         'first_name' => $first_name,
         'last_name'  => $last_name,
         'nickname'   => trim( $first_name . ' ' . $last_name ),
-        // Where the registration stands is a status, set right below.
-        'role'       => clu_get_registration_role(),
+        // The role of the form. Where the registration stands is a status, set right below.
+        'role'       => clu_register_form_role( $form ),
     ] ) );
 
     remove_action( 'user_register', $save_values, 1 );
@@ -86,6 +94,15 @@ function clu_handle_ajax_register() {
     if ( is_wp_error( $user_id ) ) {
         wp_send_json_error( [ 'message' => wp_kses_post( $user_id->get_error_message() ) ] );
     }
+
+    /**
+     * Fires when someone signed up through a register form, before any email about it.
+     *
+     * @param int   $user_id
+     * @param array $values  Field key => value, as the form sent them.
+     * @param array $form    The register form.
+     */
+    do_action( 'clu_user_registered', $user_id, $values, $form );
 
     // Not pending yet when the address has to be confirmed first, so that nobody hears
     // about the registration before then. The account stays, so sending the form again

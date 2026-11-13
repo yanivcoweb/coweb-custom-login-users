@@ -34,6 +34,7 @@ function clu_enqueue_admin_assets( $hook ) {
         'rolesNonce'         => wp_create_nonce( 'clu_roles_nonce' ),
         'createPagesNonce'   => wp_create_nonce( 'clu_create_pages_nonce' ),
         'registerFieldsNonce' => wp_create_nonce( 'clu_register_fields_nonce' ),
+        'registerFormsNonce' => wp_create_nonce( 'clu_register_forms_nonce' ),
         'loginReplacementNonce' => wp_create_nonce( 'clu_login_replacement_nonce' ),
     ] );
 
@@ -79,6 +80,10 @@ function clu_get_settings_tabs() {
         'register-fields-settings' => [
             'title' => 'Register Fields',
             'type'  => 'register_fields',
+        ],
+        'register-forms-settings' => [
+            'title' => 'Register Forms',
+            'type'  => 'register_forms',
         ],
         'login-form-settings' => [
             'title'          => 'Login Form',
@@ -175,6 +180,8 @@ function clu_render_settings_page() {
             <div id="<?php echo esc_attr( $tab_id ); ?>" class="tab-content">
                 <?php if ( ( $tab['type'] ?? '' ) === 'register_fields' ) : ?>
                     <?php clu_render_register_fields_tab(); ?>
+                <?php elseif ( ( $tab['type'] ?? '' ) === 'register_forms' ) : ?>
+                    <?php clu_render_register_forms_tab(); ?>
                 <?php elseif ( ( $tab['type'] ?? '' ) === 'password_rules' ) : ?>
                     <?php clu_render_password_rules_tab(); ?>
                 <?php elseif ( ( $tab['type'] ?? '' ) === 'messages' ) : ?>
@@ -354,6 +361,7 @@ function clu_render_register_fields_tab() {
     ?>
     <h2>Register Fields</h2>
     <p>Choose what the register form asks for, in what order, and what users can change later on the My Account form. The email is always on, because the approval flow runs through it.</p>
+    <p class="description">"On the form" and "Required" are about the main register form. A site with more forms chooses the fields of each one on the <strong>Register Forms</strong> tab, from this list: a field meant only for another form is added here, with "On the form" left off.</p>
     <p class="description">A checkbox label can hold a link, for example <code>I agree to the &lt;a href="/terms/"&gt;terms&lt;/a&gt;</code>.</p>
 
     <table class="widefat striped clu-fields-table">
@@ -450,6 +458,148 @@ function clu_render_register_field_row( $field ) {
             <?php endif; ?>
         </td>
     </tr>
+    <?php
+}
+
+function clu_render_register_forms_tab() {
+    $forms    = clu_get_register_forms();
+    $new_form = [
+        'id'     => '',
+        'name'   => '',
+        'role'   => '',
+        'title'  => '',
+        'button' => '',
+        'fields' => [ 'first_name' => 'required', 'last_name' => 'required' ],
+    ];
+    ?>
+    <h2>Register Forms</h2>
+    <p>A site can have several register forms, for example one for private customers and one for businesses. Each form has a role, which whoever signs up through it gets at once, and its own choice of fields. Everything else is shared by all the forms: the approval, the emails and the messages.</p>
+    <p class="description">The role is given when the form is sent, before anyone approved the user. Where the registration stands is the status of the user, and the plugin stops nobody from logging in: a site that gives a role prices or content of its own, and wants them only after the approval, checks the status in its theme.</p>
+
+    <div id="clu-forms-list">
+        <?php foreach ( $forms as $form ) : ?>
+            <?php clu_render_register_form_card( $form ); ?>
+        <?php endforeach; ?>
+    </div>
+
+    <template id="clu-form-card-template">
+        <?php clu_render_register_form_card( $new_form ); ?>
+    </template>
+
+    <p style="margin-top:16px;">
+        <button type="button" id="clu-add-form-btn" class="button">Add Form</button>
+    </p>
+    <p>
+        <button type="button" id="clu-save-forms-btn" class="button button-primary">Save Register Forms</button>
+        <span id="clu-save-forms-spinner" class="spinner"></span>
+    </p>
+    <div id="clu-save-forms-result"></div>
+    <?php
+}
+
+/**
+ * Prints one form of the Register Forms tab.
+ *
+ * @param array $form
+ */
+function clu_render_register_form_card( $form ) {
+    $is_main = $form['id'] === 'main';
+    $default = clu_get_registration_role();
+    $roles   = clu_register_form_role_choices();
+    $default_label = sprintf( 'The default role of the site (%s)', $roles[ $default ] ?? $default );
+
+    // A role chosen before and unfit since stays visible, so that the screen shows why
+    // new users do not get it.
+    if ( $form['role'] !== '' && ! isset( $roles[ $form['role'] ] ) ) {
+        $roles[ $form['role'] ] = $form['role'] . ' (cannot be used: new users get the default role)';
+    }
+    ?>
+    <div class="clu-form-card" data-id="<?php echo esc_attr( $form['id'] ); ?>">
+        <table class="form-table">
+            <tr>
+                <th scope="row">Form</th>
+                <td>
+                    <?php if ( $is_main ) : ?>
+                        <strong>Main form</strong>
+                    <?php else : ?>
+                        <input type="text" class="clu-form-name regular-text" aria-label="Form name" placeholder="A name for you, such as Business customers" value="<?php echo esc_attr( $form['name'] ); ?>">
+                    <?php endif; ?>
+                    <p class="description clu-form-shortcode-line" <?php echo $form['id'] === '' ? 'hidden' : ''; ?>>
+                        Shortcode: <code class="clu-form-shortcode"><?php echo esc_html( $is_main ? '[clu_register_form]' : '[clu_register_form form="' . $form['id'] . '"]' ); ?></code>
+                    </p>
+                    <?php if ( ! $is_main ) : ?>
+                        <p class="description clu-form-unsaved-line" <?php echo $form['id'] === '' ? '' : 'hidden'; ?>>The shortcode of this form appears here once you save.</p>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Role of new users</th>
+                <td>
+                    <select class="clu-form-role" aria-label="Role of new users">
+                        <option value=""><?php echo esc_html( $default_label ); ?></option>
+                        <?php foreach ( $roles as $slug => $name ) : ?>
+                            <option value="<?php echo esc_attr( $slug ); ?>" <?php selected( $form['role'], $slug ); ?>><?php echo esc_html( $name === $slug ? $name : $name . ' (' . $slug . ')' ); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="description">Roles that can manage the site or its users are not offered. A new role is made on the <strong>User Roles</strong> tab.</p>
+                </td>
+            </tr>
+            <?php if ( $is_main ) : ?>
+                <tr>
+                    <th scope="row">Fields and texts</th>
+                    <td>The fields of this form are on the <strong>Register Fields</strong> tab, and its title and button text on the <strong>Register Form</strong> tab.</td>
+                </tr>
+            <?php else : ?>
+                <tr>
+                    <th scope="row">Title</th>
+                    <td>
+                        <input type="text" class="clu-form-title regular-text" aria-label="Title" value="<?php echo esc_attr( $form['title'] ); ?>">
+                        <p class="description">Empty: the title of the main form. Shown with <code>show_title="true"</code> in the shortcode.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Button text</th>
+                    <td>
+                        <input type="text" class="clu-form-button regular-text" aria-label="Button text" value="<?php echo esc_attr( $form['button'] ); ?>">
+                        <p class="description">Empty: the button text of the main form.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Fields</th>
+                    <td>
+                        <table class="widefat striped clu-form-fields-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Field</th>
+                                    <th scope="col">On this form</th>
+                                    <th scope="col">Required</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ( clu_get_register_fields() as $field ) : ?>
+                                    <?php
+                                    $is_email = $field['key'] === 'email';
+                                    $on       = $is_email || isset( $form['fields'][ $field['key'] ] );
+                                    $required = $is_email || ( $form['fields'][ $field['key'] ] ?? '' ) === 'required';
+                                    ?>
+                                    <tr class="clu-form-field" data-key="<?php echo esc_attr( $field['key'] ); ?>">
+                                        <td><?php echo esc_html( wp_strip_all_tags( $field['label'] ) ); ?></td>
+                                        <td class="clu-field-check"><input type="checkbox" class="clu-form-field-on" aria-label="On this form" <?php checked( $on ); ?> <?php disabled( $is_email ); ?>></td>
+                                        <td class="clu-field-check"><input type="checkbox" class="clu-form-field-required" aria-label="Required" <?php checked( $required ); ?> <?php disabled( $is_email ); ?>></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                        <p class="description">The fields, their labels and their order come from the <strong>Register Fields</strong> tab. A field added there appears here after the page is loaded again.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"></th>
+                    <td><button type="button" class="button-link button-link-delete clu-form-remove">Remove this form</button></td>
+                </tr>
+            <?php endif; ?>
+        </table>
+    </div>
     <?php
 }
 
@@ -670,7 +820,7 @@ function clu_render_roles_tab() {
     $all_roles = wp_roles()->roles;
     ?>
     <h2>Approval of New Users</h2>
-    <p>A new user gets the default role of the site (<strong>Settings → General</strong>), and where the registration stands is a status on the user: Pending, Approved or Rejected. You approve and reject on the <strong>Users</strong> list or on the user's own screen. Approving sends the set-password email, rejecting sends the rejection email.</p>
+    <p>A new user gets the role of the register form they signed up through (the <strong>Register Forms</strong> tab), which is the default role of the site (<strong>Settings → General</strong>) unless another was chosen there, and where the registration stands is a status on the user: Pending, Approved or Rejected. You approve and reject on the <strong>Users</strong> list or on the user's own screen. Approving sends the set-password email, rejecting sends the rejection email.</p>
     <p class="description">The status stops nobody from logging in and hides no content. A site that wants that does it in its theme, for example with <code>clu_get_user_status( $user_id )</code>.</p>
     <p class="description">When new users confirm their email address first (on the <strong>Mail</strong> tab), their status is "Email not confirmed" until they do. You can approve one directly, or delete the accounts nobody confirmed.</p>
 

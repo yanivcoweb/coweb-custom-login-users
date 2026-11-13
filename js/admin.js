@@ -164,6 +164,93 @@ jQuery(function ($) {
         });
     });
 
+    /* ── Register forms ───────────────────────────────────────────────── */
+
+    const $formsList = $('#clu-forms-list');
+
+    // A field that is not on a form cannot be required on it.
+    function syncFormField($row) {
+        const $on = $row.find('.clu-form-field-on');
+
+        if (!$on.is(':disabled')) {
+            $row.find('.clu-form-field-required').prop('disabled', !$on.is(':checked'));
+        }
+    }
+
+    $formsList.find('.clu-form-field').each(function () {
+        syncFormField($(this));
+    });
+
+    $formsList.on('change', '.clu-form-field-on', function () {
+        syncFormField($(this).closest('.clu-form-field'));
+    });
+
+    $formsList.on('click', '.clu-form-remove', function () {
+        const $card = $(this).closest('.clu-form-card');
+
+        if ($card.attr('data-id') && !window.confirm('Remove this form? A page that shows it will show nothing in its place. The users who signed up through it stay as they are.')) {
+            return;
+        }
+
+        $card.remove();
+    });
+
+    $('#clu-add-form-btn').on('click', function () {
+        const $card = $($('#clu-form-card-template').html().trim());
+
+        $formsList.append($card);
+        $card.find('.clu-form-field').each(function () {
+            syncFormField($(this));
+        });
+        $card.find('.clu-form-name').trigger('focus');
+    });
+
+    $('#clu-save-forms-btn').on('click', function () {
+        const $result = $('#clu-save-forms-result');
+
+        const forms = $formsList.find('.clu-form-card').map(function () {
+            const $card  = $(this);
+            const fields = {};
+
+            $card.find('.clu-form-field').each(function () {
+                const $row = $(this);
+
+                if ($row.find('.clu-form-field-on').is(':checked')) {
+                    fields[$row.attr('data-key')] = $row.find('.clu-form-field-required').is(':checked') ? 'required' : 'optional';
+                }
+            });
+
+            return {
+                id: $card.attr('data-id'),
+                name: $card.find('.clu-form-name').val() || '',
+                role: $card.find('.clu-form-role').val(),
+                title: $card.find('.clu-form-title').val() || '',
+                button: $card.find('.clu-form-button').val() || '',
+                fields: fields,
+            };
+        }).get();
+
+        post($(this), $('#clu-save-forms-spinner'), $result, {
+            action: 'clu_save_register_forms',
+            nonce: config.registerFormsNonce,
+            forms: JSON.stringify(forms),
+        }, function (response) {
+            reportMessage($result)(response);
+
+            if (response.success) {
+                // Forms keep their order on the server, so they can learn their ids in turn.
+                $formsList.find('.clu-form-card').not('[data-id="main"]').each(function (index) {
+                    const id = response.data.ids[index];
+
+                    $(this).attr('data-id', id);
+                    $(this).find('.clu-form-shortcode').text('[clu_register_form form="' + id + '"]');
+                    $(this).find('.clu-form-shortcode-line').prop('hidden', false);
+                    $(this).find('.clu-form-unsaved-line').prop('hidden', true);
+                });
+            }
+        });
+    });
+
     /* ── Password rules ───────────────────────────────────────────────── */
 
     $('#clu-save-pw-rules-btn').on('click', function () {

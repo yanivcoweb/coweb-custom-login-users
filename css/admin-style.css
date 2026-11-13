@@ -111,3 +111,19 @@
 .clu-field-row:last-child .clu-field-down {
     visibility: hidden;
 }
+
+/* Register Forms tab */
+.clu-form-card {
+    max-width: 900px;
+    margin: 16px 0;
+    padding: 4px 16px;
+    background: #fff;
+    border: 1px solid #c3c4c7;
+}
+.clu-form-fields-table {
+    max-width: 560px;
+}
+.clu-form-fields-table td,
+.clu-form-fields-table th {
+    vertical-align: middle;
+}

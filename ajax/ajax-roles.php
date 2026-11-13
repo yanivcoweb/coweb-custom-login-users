@@ -82,6 +82,10 @@ function clu_delete_role_handler() {
         wp_send_json_error( [ 'message' => 'This is the default role of the site (Settings → General), which new users get.' ] );
     }
 
+    if ( in_array( $slug, array_column( clu_get_register_forms(), 'role' ), true ) ) {
+        wp_send_json_error( [ 'message' => 'A register form gives this role to new users. Choose another role for it on the Register Forms tab first.' ] );
+    }
+
     if ( get_users( [ 'role' => $slug, 'number' => 1, 'fields' => 'ID' ] ) ) {
         wp_send_json_error( [ 'message' => 'Users still have this role, and they would be left with none. Move them to another role first.' ] );
     }
