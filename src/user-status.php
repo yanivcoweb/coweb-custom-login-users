@@ -271,7 +271,8 @@ function clu_add_status_bulk_actions( $actions ) {
 
 /**
  * Handles the links and the bulk actions, before the users screen starts: the same way
- * and for the same reason as clu_handle_user_decisions().
+ * because users.php redirects a bulk request to an address without its nonce before
+ * handle_bulk_actions-users runs.
  */
 add_action( 'load-users.php', 'clu_handle_status_actions' );
 function clu_handle_status_actions() {

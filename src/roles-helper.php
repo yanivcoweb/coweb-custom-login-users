@@ -82,7 +82,8 @@ function clu_get_registration_role() {
  * Whoever holds one of the four old roles gets the matching status and the site's
  * default role instead, and the roles are removed. A site that had chosen other roles
  * as its pending or approved role keeps those roles on its users, who get the status
- * next to them. A status a user already has is left as it is.
+ * next to them, and its approved role becomes the default role of the site. A status a
+ * user already has is left as it is.
  */
 function clu_migrate_roles_to_status() {
     $default = clu_get_registration_role();
@@ -129,6 +130,14 @@ function clu_migrate_roles_to_status() {
         if ( get_role( $slug ) && ! get_users( [ 'role' => $slug, 'number' => 1, 'fields' => 'ID' ] ) ) {
             remove_role( $slug );
         }
+    }
+
+    // A site whose approved users had a role of their own, such as Customer: new users
+    // get that role from now on, since nothing else hands it out any more.
+    $approved_role = (string) array_search( 'approved', $custom, true );
+
+    if ( $approved_role !== '' && ! clu_role_is_privileged( $approved_role ) ) {
+        update_option( 'default_role', $approved_role );
     }
 
     delete_option( 'clu_roles' );

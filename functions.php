@@ -800,3 +800,16 @@ add_action( 'after_password_reset', 'clu_clear_approval_link_after_reset' );
 function clu_clear_approval_link_after_reset( $user ) {
     delete_user_meta( $user->ID, 'clu_approval_link' );
 }
+
+/**
+ * Returns an address saved on the Pages URL tab, or '' when none is saved. Unlike
+ * clu_get_page_url(), which falls back to the home page.
+ *
+ * @param string $key
+ * @return string
+ */
+function clu_saved_page_url( $key ) {
+    $options = get_option( 'clu_pages_url' );
+
+    return is_array( $options ) && ! empty( $options[ $key ] ) ? clu_normalize_site_url( $options[ $key ] ) : '';
+}

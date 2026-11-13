@@ -671,3 +671,7 @@ msgstr[1] "%d משתמשים לא עודכנו: הם כבר בסטטוס הזה,
 #: src/user-status.php
 msgid "Changing it does not change the role of the user."
 msgstr "שינוי הסטטוס לא משנה את התפקיד של המשתמש."
+
+#: src/user-status.php
+msgid "Email not confirmed"
+msgstr "האימייל לא אומת"

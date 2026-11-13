@@ -104,6 +104,18 @@ if ( ! defined( 'DOING_AJAX' ) ) {
     define( 'DOING_AJAX', true );
 }
 
+// Other plugins that act on a change of status, and may send emails of their own, are
+// left out: these tests are about this plugin's part.
+if ( isset( $GLOBALS['wp_filter']['clu_user_status_changed'] ) ) {
+    foreach ( $GLOBALS['wp_filter']['clu_user_status_changed']->callbacks as $clu_priority => $clu_callbacks ) {
+        foreach ( $clu_callbacks as $clu_callback ) {
+            if ( $clu_callback['function'] !== 'clu_on_registration_status_change' ) {
+                remove_action( 'clu_user_status_changed', $clu_callback['function'], $clu_priority );
+            }
+        }
+    }
+}
+
 $GLOBALS['clu_results'] = [ 'pass' => 0, 'fail' => 0, 'failed' => [] ];
 
 /** Notes a test this site cannot run, and why. Neither a pass nor a failure. */
@@ -285,32 +297,36 @@ $SC_ACC   = '[clu_my_account]';
 
 reset_state();
 
-section( '1. Approval workflow cannot be bypassed' );
+section( '1. A registration waits for approval, and the plugin stops nobody' );
 $email = 'clu-bypass@example.test';
 $res   = register( [ 'email' => $email ] );
-t( 'registration creates a pending user', ! empty( $res['success'] ) && ( $u = get_user_by( 'email', $email ) ) && ( clu_get_user_status( $u->ID ) === 'pending' ), msg( $res ) );
-$u = get_user_by( 'email', $email );
-$GLOBALS['clu_mails'] = [];
-$res = lost( $email );
-t( 'pending user gets no reset link from "lost password"', count( mails_to( $email ) ) === 0, 'a reset email was sent to a user nobody approved' );
+$u     = get_user_by( 'email', $email );
+t( 'registration creates a pending user', ! empty( $res['success'] ) && $u && clu_get_user_status( $u->ID ) === 'pending', msg( $res ) );
+t( '...in the default role of the site', $u && array_values( $u->roles ) === [ get_option( 'default_role' ) ], $u ? implode( ',', $u->roles ) : '' );
+t( '...marked as signed up through the plugin', $u && clu_user_signed_up_here( $u->ID ) );
+t( 'a theme can ask where the account stands', clu_user_is_pending( $u ) && ! clu_user_is_rejected( $u ) && clu_account_state_message( $u ) === 'account_pending' );
+t( 'a guest or a missing user stands nowhere', ! clu_user_is_pending( false ) && clu_account_state_message( null ) === '' && clu_account_state_message( new WP_User( 0 ) ) === '' );
 if ( $u ) {
-    $key = get_password_reset_key( $u );
-    $can_get_key = ! is_wp_error( $key );
-    t( 'core refuses to issue a reset key for a pending user', ! $can_get_key );
-    if ( ! $can_get_key ) {
-        // A key issued before the update: simulate by writing one straight to the user row.
-        $plain = wp_generate_password( 20, false );
-        $wpdb->update( $wpdb->users, [ 'user_activation_key' => time() . ':' . wp_fast_hash( $plain ) ], [ 'ID' => $u->ID ] );
-        clean_user_cache( $u->ID );
-        $key = $plain;
-    }
-    $res = set_password( $u->user_login, $key, 'Str0ng!Passw0rd' );
-    t( 'pending user cannot set a password with a reset key', empty( $res['success'] ), 'password set and logged in without approval' );
+    t( 'core issues a reset key for a pending user: blocking is for the theme', ! is_wp_error( get_password_reset_key( $u ) ) );
+    $GLOBALS['clu_mails'] = [];
+    lost( $email );
+    t( 'the lost password form emails a pending user too', count( mails_to( $email ) ) === 1 );
     wp_set_password( 'Str0ng!Passw0rd', $u->ID );
     $res = login( $u->user_login, 'Str0ng!Passw0rd' );
-    t( 'pending user with a correct password cannot log in', empty( $res['success'] ), 'logged in without approval' );
-    $auth = wp_authenticate( $u->user_login, 'Str0ng!Passw0rd' );
-    t( 'the block also applies to wp-login.php / WooCommerce', is_wp_error( $auth ) );
+    t( 'a pending user who has a password can log in', ! empty( $res['success'] ), msg( $res ) );
+    wp_set_current_user( 0 );
+    $block = function ( $user ) {
+        $key = clu_account_state_message( $user );
+        return $key !== '' ? new WP_Error( 'theme_block', clu_render_message( $key ) ) : $user;
+    };
+    add_filter( 'authenticate', $block, 99 );
+    $res = login( $u->user_login, 'Str0ng!Passw0rd' );
+    t( 'a theme can turn that user away with one filter, with the text from the Messages tab', empty( $res['success'] ) && strpos( msg( $res ), 'awaiting approval' ) !== false, msg( $res ) );
+    t( '...on every login form of the site', is_wp_error( wp_authenticate( $u->user_login, 'Str0ng!Passw0rd' ) ) );
+    remove_filter( 'authenticate', $block, 99 );
+    wp_set_current_user( $u->ID );
+    t( 'the admin bar is not hidden from them by the plugin', ! has_filter( 'show_admin_bar', 'clu_hide_admin_bar' ) && ! has_action( 'admin_init', 'clu_restrict_dashboard_access' ) );
+    wp_set_current_user( 0 );
 }
 
 reset_state();
@@ -567,31 +583,47 @@ reset_state();
 section( '11. Roles' );
 wp_set_current_user( CLU_TEST_ADMIN );
 $roles_nonce = wp_create_nonce( 'clu_roles_nonce' );
-$res = ajax( 'clu_save_roles', [ 'nonce' => $roles_nonce, 'pending_role' => 'administrator', 'approved_role' => 'approved_user' ], CLU_TEST_ADMIN );
-t( 'administrator cannot be the registration role', empty( $res['success'] ), msg( $res ) );
-wp_set_current_user( CLU_TEST_ADMIN );
-$res = ajax( 'clu_save_roles', [ 'nonce' => $roles_nonce, 'pending_role' => 'pending_user', 'approved_role' => 'administrator' ], CLU_TEST_ADMIN );
-t( 'administrator cannot be the approval role', empty( $res['success'] ), msg( $res ) );
-delete_option( 'clu_roles' );
-update_option( 'clu_roles', [ 'pending_role' => 'administrator', 'approved_role' => 'approved_user' ] );
+t( 'the plugin has no roles of its own', ! get_role( 'pending_user' ) && ! get_role( 'approved_user' ) && ! get_role( 'rejected_user' ) && ! get_role( 'unconfirmed_user' ) );
+$default = get_option( 'default_role' );
+update_option( 'default_role', 'administrator' );
 wp_set_current_user( 0 );
 $email = 'clu-admin-role@example.test';
 $res   = register( [ 'email' => $email ] );
 $u     = get_user_by( 'email', $email );
-t( 'an old saved privileged role never reaches a public sign-up', $u && ! in_array( 'administrator', $u->roles, true ), $u ? implode( ',', $u->roles ) : msg( $res ) );
-delete_option( 'clu_roles' );
-make_user( 'clu_role_holder', 'clu-rh@example.test', 'Start1!pass', 'pending_user' );
+t( 'a default role that can manage the site never reaches a public sign-up', $u && array_values( $u->roles ) === [ 'subscriber' ], $u ? implode( ',', $u->roles ) : msg( $res ) );
+add_role( 'clu_new_role', 'New' );
+update_option( 'default_role', 'clu_new_role' );
+$email = 'clu-default-role@example.test';
+$res   = register( [ 'email' => $email ] );
+$u     = get_user_by( 'email', $email );
+t( 'a new user gets the default role of the site', $u && array_values( $u->roles ) === [ 'clu_new_role' ], $u ? implode( ',', $u->roles ) : msg( $res ) );
+$as_customer = function () { return 'subscriber'; };
+add_filter( 'clu_registration_role', $as_customer );
+t( 'a site can name another role through a filter', clu_get_registration_role() === 'subscriber' );
+remove_filter( 'clu_registration_role', $as_customer );
 wp_set_current_user( CLU_TEST_ADMIN );
-$res = ajax( 'clu_delete_role', [ 'nonce' => $roles_nonce, 'role_slug' => 'pending_user' ], CLU_TEST_ADMIN );
-t( 'a role in use cannot be deleted', empty( $res['success'] ) && get_role( 'pending_user' ), msg( $res ) );
+$res = ajax( 'clu_delete_role', [ 'nonce' => $roles_nonce, 'role_slug' => 'clu_new_role' ], CLU_TEST_ADMIN );
+t( 'the default role of the site cannot be deleted', empty( $res['success'] ) && get_role( 'clu_new_role' ), msg( $res ) );
+update_option( 'default_role', $default );
+wp_set_current_user( CLU_TEST_ADMIN );
+$res = ajax( 'clu_delete_role', [ 'nonce' => $roles_nonce, 'role_slug' => 'clu_new_role' ], CLU_TEST_ADMIN );
+t( 'a role in use cannot be deleted', empty( $res['success'] ) && get_role( 'clu_new_role' ), msg( $res ) );
 wp_set_current_user( CLU_TEST_ADMIN );
 add_role( 'clu_tmp_role', 'Tmp' );
 $res = ajax( 'clu_delete_role', [ 'nonce' => $roles_nonce, 'role_slug' => 'clu_tmp_role' ], CLU_TEST_ADMIN );
 t( 'an unused custom role can be deleted', ! empty( $res['success'] ) && ! get_role( 'clu_tmp_role' ), msg( $res ) );
 t( 'roles are not re-added on every request', ! has_action( 'init', 'add_custom_user_role' ) );
+wp_set_current_user( CLU_TEST_ADMIN );
+$res = ajax( 'clu_save_roles', [ 'nonce' => $roles_nonce, 'auto_approve' => '1' ], CLU_TEST_ADMIN );
+t( 'the automatic approval is saved from the tab', ! empty( $res['success'] ) && clu_auto_approve_is_on(), msg( $res ) );
+delete_option( 'clu_auto_approve' );
 wp_set_current_user( 0 );
-$res = ajax( 'clu_save_roles', [ 'nonce' => $roles_nonce, 'pending_role' => 'subscriber', 'approved_role' => 'subscriber' ] );
-t( 'admin AJAX actions are not open to visitors', empty( $res['success'] ) );
+$res = ajax( 'clu_save_roles', [ 'nonce' => $roles_nonce, 'auto_approve' => '1' ] );
+t( 'admin AJAX actions are not open to visitors', empty( $res['success'] ) && ! clu_auto_approve_is_on() );
+ob_start();
+clu_render_roles_tab();
+$tab = ob_get_clean();
+t( 'the Roles tab has no role assignments', strpos( $tab, 'clu-pending-role' ) === false && strpos( $tab, 'clu-approved-role' ) === false && strpos( $tab, 'clu-auto-approve' ) !== false );
 
 reset_state();
 section( '12. Profile fields in wp-admin' );
@@ -626,6 +658,8 @@ require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
 /** Runs the users-screen handler the way a click does. Returns what it redirected to, or 'died'. */
 function decide( $action, $user_ids, $nonce = null, $as = CLU_TEST_ADMIN ) {
+    $names  = [ 'clu_approve' => 'clu_status_approve', 'clu_reject' => 'clu_status_reject', 'clu_remove' => 'clu_status_remove' ];
+    $action = $names[ $action ] ?? $action;
     wp_set_current_user( $as );
     $_REQUEST = [ 'action' => $action, 'users' => (array) $user_ids, '_wpnonce' => $nonce === null ? wp_create_nonce( 'bulk-users' ) : $nonce ];
     $_GET     = $_REQUEST;
@@ -636,7 +670,7 @@ function decide( $action, $user_ids, $nonce = null, $as = CLU_TEST_ADMIN ) {
     };
     add_filter( 'wp_redirect', $catch );
     try {
-        clu_handle_user_decisions();
+        clu_handle_status_actions();
     } catch ( CLU_Die $e ) {
         if ( $target === 'nothing' ) {
             $target = 'died';
@@ -660,74 +694,71 @@ $plain = make_user( 'clu_d_plain', 'clu-dp@example.test', 'Start1!pass', 'subscr
 
 wp_set_current_user( CLU_TEST_ADMIN );
 $actions = apply_filters( 'user_row_actions', [ 'edit' => 'x' ], get_userdata( $u1 ) );
-t( 'a pending user gets Approve and Reject links', isset( $actions['clu_approve'], $actions['clu_reject'], $actions['edit'] ) );
+t( 'a pending user gets approve and reject links', isset( $actions['clu_status_approve'], $actions['clu_status_reject'], $actions['edit'] ) );
 $actions = apply_filters( 'user_row_actions', [], get_userdata( $plain ) );
-t( 'a user with another role gets neither', ! isset( $actions['clu_approve'] ) && ! isset( $actions['clu_reject'] ) );
+t( 'a user with no status gets neither', ! isset( $actions['clu_status_approve'] ) && ! isset( $actions['clu_status_reject'] ) );
 $bulk = apply_filters( 'bulk_actions-users', [] );
-t( 'both are bulk actions too', isset( $bulk['clu_approve'], $bulk['clu_reject'] ) );
+t( 'both are bulk actions too', isset( $bulk['clu_status_approve'], $bulk['clu_status_reject'] ) );
 wp_set_current_user( $plain );
 $actions = apply_filters( 'user_row_actions', [], get_userdata( $u1 ) );
-t( 'someone who may not change roles gets no links', ! isset( $actions['clu_approve'] ) && ! apply_filters( 'bulk_actions-users', [] ) );
+t( 'someone who may not change roles gets no links', ! isset( $actions['clu_status_approve'] ) && ! apply_filters( 'bulk_actions-users', [] ) );
 wp_set_current_user( 0 );
 
-t( 'a request with a bad nonce does nothing', decide( 'clu_approve', $u1, 'bad' ) === 'died' && ( clu_get_user_status( get_userdata( $u1 )->ID ) === 'pending' ) );
+t( 'a request with a bad nonce does nothing', decide( 'clu_approve', $u1, 'bad' ) === 'died' && clu_get_user_status( $u1 ) === 'pending' );
 $GLOBALS['clu_mails'] = [];
 $target = decide( 'clu_approve', $u1, null, $plain );
-t( 'a subscriber cannot approve', ( clu_get_user_status( get_userdata( $u1 )->ID ) === 'pending' ) && ( query_of( $target )['clu_skipped'] ?? 0 ) == 1 && ! $GLOBALS['clu_mails'], $target );
+t( 'a subscriber cannot approve', clu_get_user_status( $u1 ) === 'pending' && ( query_of( $target )['clu_status_skipped'] ?? 0 ) == 1 && ! $GLOBALS['clu_mails'], $target );
 $target = decide( 'other_action', $u1 );
 t( 'other actions on the screen are left alone', $target === 'nothing' );
 
 $GLOBALS['clu_mails'] = [];
+$role_before = get_userdata( $u1 )->roles;
 $target = decide( 'clu_approve', $u1 );
 $mail   = last_mail();
-t( 'approve changes the role', ( clu_get_user_status( get_userdata( $u1 )->ID ) === 'approved' ) );
+t( 'approve changes the status', clu_get_user_status( $u1 ) === 'approved' );
+t( '...and never the role', get_userdata( $u1 )->roles === $role_before, implode( ',', get_userdata( $u1 )->roles ) );
 t( 'approve emails the set-password link', $mail && $mail['to'] === 'clu-d1@example.test' && strpos( $mail['message'], 'key=' ) !== false );
-t( 'the redirect reports it', ( query_of( $target )['clu_approved'] ?? 0 ) == 1, $target );
-t( 'the result does not stay in the address', in_array( 'clu_approved', wp_removable_query_args(), true ) );
+t( 'the redirect reports it', ( query_of( $target )['clu_status_done'] ?? 0 ) == 1, $target );
+t( 'the result does not stay in the address', in_array( 'clu_status_done', wp_removable_query_args(), true ) && in_array( 'clu_mail_failed', wp_removable_query_args(), true ) );
 
 $GLOBALS['clu_mails'] = [];
 $target = decide( 'clu_reject', $u2 );
 $mail   = last_mail();
-$rejected_role = clu_get_role_slug( 'rejected_role' );
-t( 'reject moves the user to the rejected role', in_array( $rejected_role, get_userdata( $u2 )->roles, true ) && ! ( clu_get_user_status( get_userdata( $u2 )->ID ) === 'pending' ) );
+t( 'reject sets the rejected status', clu_get_user_status( $u2 ) === 'rejected' && clu_user_is_rejected( get_userdata( $u2 ) ) );
 t( 'reject emails the user', count( $GLOBALS['clu_mails'] ) === 1 && $mail['to'] === 'clu-d2@example.test' && strpos( $mail['subject'], 'not approved' ) !== false, $mail ? $mail['subject'] : 'no mail' );
 t( 'the email holds no reset link', strpos( $mail['message'], 'key=' ) === false );
-t( 'the redirect reports it', ( query_of( $target )['clu_rejected'] ?? 0 ) == 1, $target );
+t( 'the redirect reports it', ( query_of( $target )['clu_status_done'] ?? 0 ) == 1, $target );
 
 wp_set_password( 'Start2!pass', $u2 );
 $res = login( 'clu_d2', 'Start2!pass' );
-t( 'a rejected user cannot log in', empty( $res['success'] ) && strpos( msg( $res ), 'not approved' ) !== false, msg( $res ) );
-t( '...through any form of the site', is_wp_error( wp_authenticate( 'clu_d2', 'Start2!pass' ) ) );
-$res = login( 'clu_d2', 'wrong' );
-t( 'a wrong password reveals nothing about the status', strpos( msg( $res ), 'not approved' ) === false, msg( $res ) );
-$GLOBALS['clu_mails'] = [];
-$res = lost( 'clu-d2@example.test' );
-t( 'a rejected user gets no reset link', ! $GLOBALS['clu_mails'] && empty( $res['success'] ), msg( $res ) );
-t( 'core refuses a reset key too', is_wp_error( get_password_reset_key( get_userdata( $u2 ) ) ) );
-$plain_key = wp_generate_password( 20, false );
-$wpdb->update( $wpdb->users, [ 'user_activation_key' => time() . ':' . wp_fast_hash( $plain_key ) ], [ 'ID' => $u2 ] );
-clean_user_cache( $u2 );
-$res = set_password( 'clu_d2', $plain_key, 'Str0ng!Passw0rd' );
-t( 'a key from before the rejection stops working', empty( $res['success'] ), msg( $res ) );
+t( 'the plugin does not stop a rejected user from logging in', ! empty( $res['success'] ), msg( $res ) );
+wp_set_current_user( 0 );
+t( '...or from getting a reset key', ! is_wp_error( get_password_reset_key( get_userdata( $u2 ) ) ) );
+t( 'a theme learns it from clu_account_state_message()', clu_account_state_message( get_userdata( $u2 ) ) === 'account_rejected' && strpos( clu_render_message( 'account_rejected' ), 'not approved' ) !== false );
+$res = register( [ 'email' => 'clu-d2@example.test' ] );
+t( 'a rejected user cannot register again with the same address', empty( $res['success'] ), msg( $res ) );
 
 wp_set_current_user( CLU_TEST_ADMIN );
 $actions = apply_filters( 'user_row_actions', [], get_userdata( $u2 ) );
-t( 'a rejected user can still be approved, and not rejected again', isset( $actions['clu_approve'] ) && ! isset( $actions['clu_reject'] ) );
+t( 'a rejected user can still be approved, and not rejected again', isset( $actions['clu_status_approve'] ) && ! isset( $actions['clu_status_reject'] ) );
 wp_set_current_user( 0 );
 $GLOBALS['clu_mails'] = [];
 decide( 'clu_approve', $u2 );
 $args = args_from_link( link_from_mail( last_mail() ) );
-t( 'approving a rejected user sends the set-password link', ( clu_get_user_status( get_userdata( $u2 )->ID ) === 'approved' ) && ! empty( $args['key'] ) );
+t( 'approving a rejected user sends the set-password link', clu_get_user_status( $u2 ) === 'approved' && ! empty( $args['key'] ) );
 $res = set_password( 'clu_d2', $args['key'] ?? '', 'Str0ng!Passw0rd' );
 t( '...and that link works', ! empty( $res['success'] ), msg( $res ) );
 wp_set_current_user( 0 );
 
 $u4 = make_user( 'clu_d4', 'clu-d4@example.test', 'Start1!pass', pending_role() );
 $GLOBALS['clu_mails'] = [];
-$target = decide( 'clu_reject', [ $u3, $u4, $plain, 1, 999999 ] );
+$target = decide( 'clu_reject', [ $u3, $u4, $u2, 999999 ] );
 $q = query_of( $target );
-t( 'a bulk action handles several users at once', ( $q['clu_rejected'] ?? 0 ) == 2 && count( $GLOBALS['clu_mails'] ) === 2, $target );
-t( 'a bulk action skips anyone not waiting', ( $q['clu_skipped'] ?? 0 ) == 3 && in_array( 'subscriber', get_userdata( $plain )->roles, true ) && user_can( CLU_TEST_ADMIN, 'manage_options' ), $target );
+t( 'a bulk action handles several users at once', ( $q['clu_status_done'] ?? 0 ) == 3 && clu_get_user_status( $u3 ) === 'rejected' && clu_get_user_status( $u4 ) === 'rejected', $target );
+t( '...emails only those who were waiting', count( $GLOBALS['clu_mails'] ) === 2 && ! mails_to( 'clu-d2@example.test' ), (string) count( $GLOBALS['clu_mails'] ) );
+t( '...and skips a user who does not exist', ( $q['clu_status_skipped'] ?? 0 ) == 1, $target );
+$target = decide( 'clu_reject', [ $u3 ] );
+t( 'a user already there is skipped', ( query_of( $target )['clu_status_skipped'] ?? 0 ) == 1 && ( query_of( $target )['clu_status_done'] ?? 0 ) == 0, $target );
 wp_set_current_user( 0 );
 
 $u5 = make_user( 'clu_d5', 'clu-d5@example.test', 'Start1!pass', pending_role() );
@@ -736,31 +767,29 @@ add_filter( 'pre_wp_mail', $fail, 20 );
 $target = decide( 'clu_approve', $u5 );
 remove_filter( 'pre_wp_mail', $fail, 20 );
 $q = query_of( $target );
-t( 'a failed email is reported, and the decision still stands', ( $q['clu_mail_failed'] ?? 0 ) == 1 && ( $q['clu_approved'] ?? 0 ) == 1 && ( clu_get_user_status( get_userdata( $u5 )->ID ) === 'approved' ), $target );
+t( 'a failed email is reported, and the decision still stands', ( $q['clu_mail_failed'] ?? 0 ) == 1 && ( $q['clu_status_done'] ?? 0 ) == 1 && clu_get_user_status( $u5 ) === 'approved', $target );
 
-$_GET = [ 'clu_approved' => '1', 'clu_rejected' => '2', 'clu_mail_failed' => '1', 'clu_skipped' => '3' ];
+$_GET = [ 'clu_status_done' => '3', 'clu_mail_failed' => '1', 'clu_status_skipped' => '3' ];
 $GLOBALS['pagenow'] = 'users.php';
 ob_start();
-clu_show_decision_notices();
+clu_show_status_notices();
 $notices = ob_get_clean();
 $GLOBALS['pagenow'] = 'index.php';
 $_GET = [];
-t( 'the screen shows what happened', substr_count( $notices, 'class="notice' ) === 4, $notices );
+t( 'the screen shows what happened', substr_count( $notices, 'class="notice' ) === 3, $notices );
 
 $u6 = make_user( 'clu_d6', 'clu-d6@example.test', 'Start1!pass', pending_role() );
 $GLOBALS['clu_mails'] = [];
-get_userdata( $u6 )->set_role( $rejected_role );
-t( 'choosing the role on the user screen sends the same email', count( $GLOBALS['clu_mails'] ) === 1 && last_mail()['to'] === 'clu-d6@example.test' );
+clu_set_user_status( $u6, 'rejected' );
+t( 'choosing the status on the user screen sends the same email', count( $GLOBALS['clu_mails'] ) === 1 && last_mail()['to'] === 'clu-d6@example.test' );
 $u7 = make_user( 'clu_d7', 'clu-d7@example.test', 'Start1!pass', approved_role() );
 $manager = WP_Session_Tokens::get_instance( $u7 );
 $manager->create( time() + 3600 );
 $GLOBALS['clu_mails'] = [];
-get_userdata( $u7 )->set_role( $rejected_role );
-t( 'moving an approved user there sends no rejection email', ! $GLOBALS['clu_mails'] );
-t( '...and logs them out', ! $manager->get_all() );
-wp_set_current_user( $u7 );
-t( 'a rejected user is kept out of the dashboard too', clu_current_user_is_front_end_only() );
-wp_set_current_user( 0 );
+clu_set_user_status( $u7, 'rejected' );
+t( 'rejecting an approved user sends no rejection email', ! $GLOBALS['clu_mails'] );
+t( '...and does not log them out: that too is for the theme', (bool) $manager->get_all() );
+$manager->destroy_all();
 
 $u8 = make_user( 'clu_d8', 'clu-d8@example.test', 'Start1!pass', pending_role() );
 add_filter( 'clu_send_rejection_email', '__return_false' );
@@ -775,26 +804,26 @@ decide( 'clu_reject', $u9 );
 t( 'a % in the rejection subject is safe', last_mail() && last_mail()['subject'] === '100% no for Test User', last_mail() ? last_mail()['subject'] : 'no mail' );
 delete_option( 'clu_messages' );
 
-reset_state();
-wp_set_current_user( CLU_TEST_ADMIN );
-$res = ajax( 'clu_save_roles', [ 'nonce' => wp_create_nonce( 'clu_roles_nonce' ), 'pending_role' => 'rejected_user', 'approved_role' => 'approved_user' ], CLU_TEST_ADMIN );
-t( 'the rejected role cannot be the pending role', empty( $res['success'] ), msg( $res ) );
-wp_set_current_user( CLU_TEST_ADMIN );
-$res = ajax( 'clu_delete_role', [ 'nonce' => wp_create_nonce( 'clu_roles_nonce' ), 'role_slug' => 'rejected_user' ], CLU_TEST_ADMIN );
-t( 'the rejected role cannot be deleted', empty( $res['success'] ) && get_role( 'rejected_user' ), msg( $res ) );
-ob_start();
-clu_render_roles_tab();
-$tab = ob_get_clean();
-t( 'the Roles tab does not offer it', strpos( $tab, 'value="rejected_user"' ) === false );
+// A status on someone who never signed up through the plugin, such as a business customer
+// another plugin approves: no email of the registration flow goes out.
+$other = make_user( 'clu_d_other', 'clu-do@example.test', 'Start1!pass', 'subscriber' );
+$GLOBALS['clu_mails'] = [];
+clu_set_user_status( $other, 'pending' );
+clu_set_user_status( $other, 'rejected' );
+clu_set_user_status( $other, 'approved' );
+decide( 'clu_reject', $other );
+decide( 'clu_approve', $other );
+t( 'a status on a user who did not sign up here sends no email', ! $GLOBALS['clu_mails'] && clu_get_user_status( $other ) === 'approved' && ! clu_user_signed_up_here( $other ), (string) count( $GLOBALS['clu_mails'] ) );
 wp_set_current_user( 0 );
 
 section( '16. The count of users awaiting approval' );
 reset_state();
-foreach ( get_users( [ 'role' => pending_role(), 'fields' => 'ID' ] ) as $uid ) {
-    get_userdata( $uid )->set_role( 'subscriber' );
+foreach ( get_users( [ 'meta_key' => 'clu_status', 'meta_value' => 'pending', 'fields' => 'ID' ] ) as $uid ) {
+    delete_user_meta( $uid, 'clu_status' );
 }
+delete_transient( 'clu_status_pending_count' );
 t( 'it starts at zero', clu_get_pending_count() === 0, (string) clu_get_pending_count() );
-t( 'zero is remembered', get_transient( 'clu_pending_count' ) !== false );
+t( 'zero is remembered', get_transient( 'clu_status_pending_count' ) !== false );
 $res = register( [ 'email' => 'clu-count1@example.test' ] );
 $res = register( [ 'email' => 'clu-count2@example.test' ] );
 t( 'it follows new registrations', clu_get_pending_count() === 2, (string) clu_get_pending_count() );
@@ -812,7 +841,7 @@ wp_set_current_user( CLU_TEST_ADMIN );
 clu_add_pending_menu();
 t( 'the Users menu shows the count', strpos( $GLOBALS['menu'][70][0], 'awaiting-mod' ) !== false && strpos( $GLOBALS['menu'][70][0], '>1<' ) !== false, $GLOBALS['menu'][70][0] );
 $sub = end( $GLOBALS['submenu']['users.php'] ) ?: [];
-t( 'the menu links to the list of those users', ( $sub[2] ?? '' ) === 'users.php?role=' . pending_role(), print_r( $sub, true ) );
+t( 'the menu links to the list of those users', ( $sub[2] ?? '' ) === 'users.php?clu_status=pending', print_r( $sub, true ) );
 $GLOBALS['menu'] = [ 70 => [ 'Users', 'list_users', 'users.php' ] ];
 $GLOBALS['submenu'] = [];
 wp_set_current_user( $plain );
@@ -929,7 +958,7 @@ t( 'a web address is completed', $u && get_user_meta( $u->ID, 'clu_field_website
 t( 'long text keeps its lines and loses tags', $u && get_user_meta( $u->ID, 'clu_field_notes', true ) === "line one\nline twox" || ( $u && strpos( get_user_meta( $u->ID, 'clu_field_notes', true ), '<script' ) === false && strpos( get_user_meta( $u->ID, 'clu_field_notes', true ), "\n" ) !== false ), $u ? get_user_meta( $u->ID, 'clu_field_notes', true ) : '' );
 $admin_mail = $GLOBALS['clu_mails'][0] ?? null;
 t( 'the admin email lists the details', $admin_mail && strpos( $admin_mail['message'], 'Phone number' ) !== false && strpos( $admin_mail['message'], '+972 (50) 123-4567' ) !== false && strpos( $admin_mail['message'], $email ) !== false, $admin_mail ? $admin_mail['message'] : 'no mail' );
-t( 'it links to the list of users awaiting approval', $admin_mail && strpos( $admin_mail['message'], 'users.php?role=' . pending_role() ) !== false );
+t( 'it links to the list of users awaiting approval', $admin_mail && strpos( $admin_mail['message'], 'users.php?clu_status=pending' ) !== false );
 
 foreach ( [
     'a required custom field'  => [ 'clu_field_phone_number' => '' ],
@@ -1092,7 +1121,7 @@ if ( $bare ) {
     t( 'an unticked box is saved as such', get_user_meta( $ad, 'clu_field_newsletter', true ) === '' );
     wp_set_current_user( 0 );
 
-    $_GET = [ 'role' => pending_role() ];
+    $_GET = [ 'clu_status' => 'pending' ];
     $columns = apply_filters( 'manage_users_columns', [ 'username' => 'Username', 'email' => 'Email' ] );
     $_GET = [ 'role' => 'subscriber' ];
     $other = apply_filters( 'manage_users_columns', [ 'username' => 'Username' ] );
@@ -1123,7 +1152,6 @@ t( 'an updated site keeps all of its form fields on and required', $fields['comp
 t( 'it keeps the labels it saved', $fields['company']['label'] === 'שם החברה', $fields['company']['label'] );
 t( 'it keeps the company field in My Account', $fields['company']['account'] );
 t( 'it keeps the placeholders it had', $fields['first_name']['placeholder'] === 'First Name' && $fields['company']['placeholder'] === 'Company Name' );
-t( 'it gets the rejected role', (bool) get_role( 'rejected_user' ) );
 t( 'the version is recorded', get_option( 'clu_db_version' ) === CLU_VERSION );
 update_option( 'clu_register_fields', [] );
 $saved = [ [ 'key' => 'email', 'label' => 'X', 'enabled' => true ] ];
@@ -1131,6 +1159,47 @@ update_option( 'clu_register_fields', $saved );
 update_option( 'clu_db_version', '1.1.0' );
 clu_maybe_upgrade();
 t( 'an update does not overwrite a saved field list', get_option( 'clu_register_fields' ) === $saved );
+
+// 2.0: the roles of older versions become a status.
+reset_state();
+$default_before = get_option( 'default_role' );
+foreach ( [ 'unconfirmed_user', 'pending_user', 'rejected_user', 'approved_user' ] as $old_role ) {
+    add_role( $old_role, $old_role, [] );
+}
+add_role( 'clu_member', 'Member', [ 'read' => true ] );
+$old_users = [];
+foreach ( [ 'pending' => 'pending_user', 'approved' => 'approved_user', 'rejected' => 'rejected_user', 'unconfirmed' => 'unconfirmed_user' ] as $state => $old_role ) {
+    $old_users[ $state ] = make_user( 'clu_old_' . $state, 'clu-old-' . $state . '@example.test', 'Start1!pass', 'subscriber' );
+    get_userdata( $old_users[ $state ] )->set_role( $old_role );
+}
+$old_staff = make_user( 'clu_old_staff', 'clu-old-staff@example.test', 'Start1!pass', 'editor' );
+get_userdata( $old_staff )->add_role( 'approved_user' );
+$old_member = make_user( 'clu_old_member', 'clu-old-member@example.test', 'Start1!pass', 'clu_member' );
+update_option( 'clu_roles', [ 'pending_role' => 'pending_user', 'approved_role' => 'clu_member' ] );
+update_option( 'default_role', 'pending_user' );
+update_option( 'clu_db_version', '1.9.0' );
+$GLOBALS['clu_mails'] = [];
+clu_maybe_upgrade();
+wp_cache_flush();
+$stands = function ( $id, $status, $roles ) {
+    return clu_get_user_status( $id ) === $status && array_values( get_userdata( $id )->roles ) === $roles;
+};
+t( 'a pending user keeps waiting, by status, in an ordinary role', $stands( $old_users['pending'], 'pending', [ 'subscriber' ] ), clu_get_user_status( $old_users['pending'] ) . ' / ' . implode( ',', get_userdata( $old_users['pending'] )->roles ) );
+t( 'an approved user is approved by status', $stands( $old_users['approved'], 'approved', [ 'subscriber' ] ) );
+t( 'a rejected user stays rejected', $stands( $old_users['rejected'], 'rejected', [ 'subscriber' ] ) );
+t( 'an unconfirmed user stays unconfirmed', $stands( $old_users['unconfirmed'], 'unconfirmed', [ 'subscriber' ] ) );
+t( 'an account that had another role too keeps only that one', $stands( $old_staff, 'approved', [ 'editor' ] ), implode( ',', get_userdata( $old_staff )->roles ) );
+t( 'a role the site had chosen as approved stays on its users, with the status next to it', $stands( $old_member, 'approved', [ 'clu_member' ] ) && ! clu_user_signed_up_here( $old_member ) );
+t( 'the four roles are gone', ! get_role( 'pending_user' ) && ! get_role( 'approved_user' ) && ! get_role( 'rejected_user' ) && ! get_role( 'unconfirmed_user' ) );
+t( 'the role settings are gone', get_option( 'clu_roles' ) === false );
+t( 'new users get the role approved users had', get_option( 'default_role' ) === 'clu_member', (string) get_option( 'default_role' ) );
+t( 'the update sends no email', ! $GLOBALS['clu_mails'] );
+clu_set_user_status( $old_users['pending'], 'approved' );
+t( 'approving one of them afterwards still sends the set-password email', count( mails_to( 'clu-old-pending@example.test' ) ) === 1 );
+$GLOBALS['clu_mails'] = [];
+clu_maybe_upgrade();
+t( 'the update runs once', get_option( 'clu_db_version' ) === CLU_VERSION && clu_get_user_status( $old_users['rejected'] ) === 'rejected' );
+update_option( 'default_role', $default_before );
 
 reset_state();
 $old_body = "Hello,<br><br>{display_name} has registered on the website.<br><br>To approve the registration, click the link below and change the user role from \"Pending User\" to \"Approved User\": {edit_user_link}<br><br>";
@@ -1153,15 +1222,22 @@ wp_cache_flush();
 clu_maybe_upgrade();
 t( 'a new site gets the short form', ! in_array( 'company', array_column( clu_get_register_form_fields(), 'key' ), true ) );
 t( 'and no field in My Account that nobody asked for', ! in_array( 'company', array_column( clu_get_account_fields(), 'key' ), true ) );
-t( 'and all three roles', get_role( 'pending_user' ) && get_role( 'approved_user' ) && get_role( 'rejected_user' ) );
+t( 'and no roles of its own', ! get_role( 'pending_user' ) && ! get_role( 'approved_user' ) && ! get_role( 'rejected_user' ) && ! get_role( 'unconfirmed_user' ) );
 reset_state();
 delete_option( 'clu_register_fields' );
 delete_option( 'clu_db_version' );
+// Version 1.0 kept no version, but its roles were always there.
+add_role( 'pending_user', 'Pending User', [] );
 clu_maybe_upgrade();
 t( 'a site from 1.0 counts as an update', in_array( 'company', array_column( clu_get_register_form_fields(), 'key' ), true ) );
 
 reset_state();
 reset_state();
+/** Makes a published page. */
+function make_page( $title, $content, $unused = false, $extra = [] ) {
+    return wp_insert_post( array_merge( [ 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => $title, 'post_content' => $content ], $extra ) );
+}
+
 section( '22. Replacing wp-login.php' );
 
 /** Runs what wp-login.php runs first. Returns the address it was sent to, or stays. */
@@ -1223,6 +1299,7 @@ update_option( 'clu_pages_url', [ 'url_page_login' => home_url( '/?page_id=' . $
 $res = $save_replacement( 1 );
 t( '...nor with a draft', empty( $res['success'] ), msg( $res ) );
 update_option( 'clu_pages_url', $all_pages );
+$subs = make_user( 'clu_subs_r', 'clu-subs-r@example.test', 'Start1!pass', 'subscriber' );
 $res = $save_replacement( 1, $subs );
 t( 'a subscriber cannot turn it on', empty( $res['success'] ) && get_option( 'clu_replace_wp_login' ) !== '1', msg( $res ) );
 $res = ajax( 'clu_save_login_replacement', [ 'nonce' => 'x', 'enabled' => 1 ] );
@@ -1350,14 +1427,7 @@ t( 'a sign-up there waits for approval too', $core && clu_user_is_pending( $core
 t( 'the admin hears about it from the plugin', count( mails_to( trim( get_option( 'admin_email' ) ) ) ) === 1 && strpos( mails_to( trim( get_option( 'admin_email' ) ) )[0]['message'], 'clu-core-signup@example.test' ) !== false, print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
 t( 'the user gets no email about a password', ! mails_to( 'clu-core-signup@example.test' ) );
 wp_set_password( 'Str0ng!Passw0rd', $core_id );
-t( 'and cannot log in until approved', is_wp_error( wp_authenticate( 'clu_core_signup', 'Str0ng!Passw0rd' ) ) );
-add_action( 'register_new_user', 'wp_send_new_user_notifications' );
-$old_default = get_option( 'default_role' );
-update_option( 'default_role', pending_role() );
-$GLOBALS['clu_mails'] = [];
-$core_id = register_new_user( 'clu_core_signup2', 'clu-core-signup2@example.test' );
-t( 'a pending default role does not email the admin twice', count( mails_to( trim( get_option( 'admin_email' ) ) ) ) === 1, (string) count( mails_to( trim( get_option( 'admin_email' ) ) ) ) );
-update_option( 'default_role', $old_default );
+t( 'it is marked as signed up through the plugin, so the emails follow its status', clu_user_signed_up_here( $core_id ) );
 add_action( 'register_new_user', 'wp_send_new_user_notifications' );
 $GLOBALS['clu_mails'] = [];
 $created = wp_insert_user( [ 'user_login' => 'clu_by_admin', 'user_email' => 'clu-by-admin@example.test', 'user_pass' => 'Start1!pass', 'role' => 'subscriber' ] );
@@ -1447,7 +1517,7 @@ function confirm_link_of( $email ) {
     $u     = get_user_by( 'email', $email );
     t( 'the form asks to confirm the address', ! empty( $res['success'] ) && msg( $res ) === $plain( 'register_confirm_sent' ), msg( $res ) );
     t( 'the account waits for its address, not for approval', $u && clu_user_is_unconfirmed( $u ) && ! clu_user_is_pending( $u ), $u ? implode( ',', $u->roles ) : 'no user' );
-    t( 'the role for it is there, for the users list', (bool) get_role( 'unconfirmed_user' ) );
+    t( 'by a status: no role is added for it', ! get_role( 'unconfirmed_user' ) && clu_get_user_status( $u->ID ) === 'unconfirmed' );
     t( 'what the user filled in is saved already', get_user_meta( $u->ID, 'company', true ) === 'Acme' );
     t( 'the admin hears nothing yet', ! mails_to( $admin ) );
     t( 'it is not counted as awaiting approval', clu_get_pending_count() === $count, clu_get_pending_count() . ' vs ' . $count );
@@ -1460,13 +1530,8 @@ function confirm_link_of( $email ) {
 
     wp_set_password( 'Str0ng!Passw0rd', $u->ID );
     $auth = wp_authenticate( $u->user_login, 'Str0ng!Passw0rd' );
-    t( 'it cannot log in, even with the right password', is_wp_error( $auth ) && $auth->get_error_code() === 'clu_account_unconfirmed', is_wp_error( $auth ) ? $auth->get_error_code() : 'logged in' );
-    $res = lost( $email );
-    t( 'it cannot get a reset email', empty( $res['success'] ) && msg( $res ) === $plain( 'account_unconfirmed' ) && count( mails_to( $email ) ) === 1, msg( $res ) );
-    t( 'the users list offers Approve only', clu_available_decisions( get_userdata( $u->ID ) ) === [ 'approve' ] );
-    wp_set_current_user( $u->ID );
-    t( 'it is kept out of the dashboard', clu_current_user_is_front_end_only() );
-    wp_set_current_user( 0 );
+    t( 'the plugin lets it log in; a theme learns where it stands', ! is_wp_error( $auth ) && clu_account_state_message( get_userdata( $u->ID ) ) === 'account_unconfirmed', is_wp_error( $auth ) ? $auth->get_error_code() : '' );
+    t( 'the users list offers approving only', array_keys( clu_status_actions_for( 'unconfirmed' ) ) === [ 'approve' ] );
 
     $to = open_confirm_link( add_query_arg( 'clu_confirm', ( $args['clu_confirm'] ?? '' ) . 'x', $link ) );
     t( 'a wrong key is refused', strpos( $to, 'clu_email_confirmed=invalid' ) !== false && clu_user_is_unconfirmed( get_userdata( $u->ID ) ), $to );
@@ -1540,19 +1605,16 @@ function confirm_link_of( $email ) {
     $email = 'clu-confirm-approve@example.test';
     register( [ 'email' => $email ] );
     $u = get_user_by( 'email', $email );
-    wp_set_current_user( CLU_TEST_ADMIN );
     $GLOBALS['clu_mails'] = [];
-    $r = clu_decide_user( $u->ID, 'reject' );
-    t( 'an unconfirmed account cannot be rejected', $r === 'skipped' && clu_user_is_unconfirmed( get_userdata( $u->ID ) ) && ! $GLOBALS['clu_mails'], $r );
-    $r = clu_decide_user( $u->ID, 'approve' );
+    $target = decide( 'clu_approve', $u->ID );
     $u = get_userdata( $u->ID );
-    t( 'an admin can approve one directly', $r === 'done' && ( clu_get_user_status( $u->ID ) === 'approved' ), $r . ' ' . implode( ',', $u->roles ) );
+    t( 'an admin can approve one directly', ( query_of( $target )['clu_status_done'] ?? 0 ) == 1 && clu_get_user_status( $u->ID ) === 'approved', $target );
     t( 'which sends the set-password email only', count( mails_to( $email ) ) === 1 && strpos( mails_to( $email )[0]['message'], 'key=' ) !== false && ! mails_to( $admin ), print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
     $GLOBALS['clu_mails'] = [];
-    $made = wp_insert_user( [ 'user_login' => 'clu_made_pending', 'user_email' => 'clu-made-pending@example.test', 'user_pass' => 'Start1!pass', 'role' => pending_role() ] );
+    wp_set_current_user( CLU_TEST_ADMIN );
+    $made = wp_insert_user( [ 'user_login' => 'clu_made_by_admin', 'user_email' => 'clu-made-by-admin@example.test', 'user_pass' => 'Start1!pass', 'role' => 'subscriber' ] );
     wp_set_current_user( 0 );
-    $confirm_mails = array_filter( $GLOBALS['clu_mails'], function ( $m ) { return stripos( $m['subject'], 'confirm' ) !== false; } );
-    t( 'an account an admin makes in the pending role skips the confirmation', ! is_wp_error( $made ) && clu_user_is_pending( get_userdata( $made ) ) && ! $confirm_mails, print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
+    t( 'an account an admin makes is asked nothing and has no status', ! is_wp_error( $made ) && clu_get_user_status( $made ) === '' && ! $GLOBALS['clu_mails'], print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
 
     // The form built into WordPress.
     $GLOBALS['clu_mails'] = [];
@@ -1561,13 +1623,10 @@ function confirm_link_of( $email ) {
     t( 'a sign-up on the form built into WordPress confirms its address too', ! is_wp_error( $core_id ) && clu_user_is_unconfirmed( get_userdata( $core_id ) ) );
     t( 'it gets the link, no email about a password, and the admin hears nothing', count( $to_user ) === 1 && $to_user[0]['subject'] === 'Website: Please confirm your email address' && ! mails_to( $admin ), print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
     add_action( 'register_new_user', 'wp_send_new_user_notifications' );
-    $old_default = get_option( 'default_role' );
-    update_option( 'default_role', pending_role() );
     $GLOBALS['clu_mails'] = [];
     $core_id2 = register_new_user( 'clu_core_confirm2', 'clu-core-confirm2@example.test' );
-    update_option( 'default_role', $old_default );
     add_action( 'register_new_user', 'wp_send_new_user_notifications' );
-    t( 'the same with the pending role as the default role', ! is_wp_error( $core_id2 ) && clu_user_is_unconfirmed( get_userdata( $core_id2 ) ) && count( mails_to( 'clu-core-confirm2@example.test' ) ) === 1 && ! mails_to( $admin ), print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
+    t( 'and so does the next one', ! is_wp_error( $core_id2 ) && clu_user_is_unconfirmed( get_userdata( $core_id2 ) ) && count( mails_to( 'clu-core-confirm2@example.test' ) ) === 1 && ! mails_to( $admin ), print_r( array_column( $GLOBALS['clu_mails'], 'subject' ), true ) );
     $link2 = confirm_link_of( 'clu-core-confirm2@example.test' );
 
     // Turned off again.
@@ -1597,19 +1656,6 @@ function confirm_link_of( $email ) {
 
     // Settings.
     wp_set_current_user( CLU_TEST_ADMIN );
-    $res = ajax( 'clu_save_roles', [ 'nonce' => wp_create_nonce( 'clu_roles_nonce' ), 'pending_role' => 'unconfirmed_user', 'approved_role' => approved_role() ], CLU_TEST_ADMIN );
-    t( 'the Unconfirmed User role cannot be chosen as the pending role', empty( $res['success'] ) && clu_get_role_slug( 'pending_role' ) === 'pending_user', msg( $res ) );
-    wp_set_current_user( CLU_TEST_ADMIN );
-    $res = ajax( 'clu_delete_role', [ 'nonce' => wp_create_nonce( 'clu_roles_nonce' ), 'role_slug' => 'unconfirmed_user' ], CLU_TEST_ADMIN );
-    t( 'nor deleted', empty( $res['success'] ) && get_role( 'unconfirmed_user' ), msg( $res ) );
-    wp_set_current_user( CLU_TEST_ADMIN );
-    ob_start();
-    clu_render_roles_tab();
-    $tab = ob_get_clean();
-    t( 'nor offered on the User Roles tab', strpos( $tab, 'value="unconfirmed_user"' ) === false && strpos( $tab, 'value="' . pending_role() . '"' ) !== false );
-    update_option( 'clu_roles', [ 'pending_role' => pending_role(), 'approved_role' => approved_role(), 'unconfirmed_role' => 'subscriber' ] );
-    t( 'and it is not a setting', clu_get_role_slug( 'unconfirmed_role' ) === 'unconfirmed_user' );
-    delete_option( 'clu_roles' );
 
     if ( ! function_exists( 'add_settings_section' ) ) {
         require_once ABSPATH . 'wp-admin/includes/template.php';
@@ -2080,7 +2126,7 @@ section( '26. Per site: templates, automatic approval, languages' );
 }
 
 reset_state();
-section( '27. A status on the user, next to the role' );
+section( '27. The status on the user, next to the role' );
 {
     /** Runs the status handler of the users screen the way a click does. Returns where it redirected to, or 'died'. */
     $status_click = function ( $action, $user_ids, $nonce = null, $as = CLU_TEST_ADMIN ) {
@@ -2106,33 +2152,35 @@ section( '27. A status on the user, next to the role' );
         return $target;
     };
 
+    // Whoever the earlier sections left waiting.
+    foreach ( get_users( [ 'meta_key' => 'clu_status', 'meta_value' => 'pending', 'fields' => 'ID' ] ) as $uid ) {
+        delete_user_meta( $uid, 'clu_status' );
+    }
+    delete_transient( 'clu_status_pending_count' );
+
     $s1    = make_user( 'clu_s1', 'clu-s1@example.test', 'Start1!pass', 'subscriber' );
     $s2    = make_user( 'clu_s2', 'clu-s2@example.test', 'Start1!pass', 'subscriber' );
-    $spage = make_page( 'Status only', 'For the approved.' );
 
-    // Off, as on every site that never turned it on.
-    t( 'off by default', ! clu_status_is_on() );
+    // Always in use since 2.0; the filter is for other code that asks.
+    t( 'the status is always in use', clu_status_is_on() );
     update_user_meta( $s1, 'clu_status', 'approved' );
-    t( 'while off nobody has a status, whatever is saved', clu_get_user_status( $s1 ) === '' && ! clu_user_status_is_approved( $s1 ) );
-    t( 'while off a status cannot be set', clu_set_user_status( $s2, 'approved' ) === false && get_user_meta( $s2, 'clu_status', true ) === '' );
-    t( 'while off it opens no restricted content', visit( $spage, $s1 ) !== 'open' );
-    wp_set_current_user( CLU_TEST_ADMIN );
-    t( 'while off the users list has no column, links or bulk actions', ! isset( apply_filters( 'manage_users_columns', [] )['clu_status'] ) && ! array_filter( array_keys( apply_filters( 'user_row_actions', [], get_userdata( $s1 ) ) ), function ( $k ) { return strpos( $k, 'clu_status_' ) === 0; } ) && ! isset( apply_filters( 'bulk_actions-users', [] )['clu_status_approve'] ) );
-    ob_start();
-    do_action( 'edit_user_profile', get_userdata( $s1 ) );
-    t( 'while off the user screen has no status field', strpos( ob_get_clean(), 'name="clu_status"' ) === false );
-    t( 'while off a click on an old link does nothing', $status_click( 'clu_status_reject', $s1 ) === 'nothing' && get_user_meta( $s1, 'clu_status', true ) === 'approved' );
+    add_filter( 'clu_status_is_on', '__return_false' );
+    t( 'a filter can take it out of use, and then nobody has one', ! clu_status_is_on() && clu_get_user_status( $s1 ) === '' && clu_set_user_status( $s2, 'approved' ) === false );
+    remove_filter( 'clu_status_is_on', '__return_false' );
+    t( 'what was saved counts again afterwards', clu_get_user_status( $s1 ) === 'approved' );
     delete_user_meta( $s1, 'clu_status' );
-    wp_set_current_user( 0 );
 
     // On.
-    update_option( 'clu_user_status', [ 'enabled' => '1', 'label' => 'Business customer' ] );
-    t( 'on, with the name the site gave', clu_status_is_on() && clu_status_label() === 'Business customer' );
-    update_option( 'clu_user_status', [ 'enabled' => '1', 'label' => '' ] );
+    update_option( 'clu_user_status', [ 'label' => 'Business customer' ] );
+    t( 'it carries the name the site gave', clu_status_label() === 'Business customer' );
+    update_option( 'clu_user_status', [ 'label' => '' ] );
     t( 'without a name it is "Status"', clu_status_label() === 'Status' );
-    update_option( 'clu_user_status', [ 'enabled' => '1', 'label' => 'Business customer' ] );
+    update_option( 'clu_user_status', [ 'label' => 'Business customer' ] );
 
+    // Other than the plugin's own listener, which acts only on users who signed up through it.
+    remove_action( 'clu_user_status_changed', 'clu_on_registration_status_change', 5 );
     $others = has_action( 'clu_user_status_changed' );
+    add_action( 'clu_user_status_changed', 'clu_on_registration_status_change', 5, 3 );
     $seen   = [];
     $spy    = function ( $user_id, $status, $old ) use ( &$seen ) {
         $seen[] = [ $user_id, $status, $old ];
@@ -2144,7 +2192,6 @@ section( '27. A status on the user, next to the role' );
     t( 'a user starts without a status', clu_get_user_status( $s1 ) === '' );
     t( 'setting it to pending', clu_set_user_status( $s1, 'pending' ) && clu_get_user_status( $s1 ) === 'pending' );
     t( 'the pending count follows', clu_status_pending_count() === 1 );
-    t( 'a pending user sees no restricted content', visit( $spage, $s1 ) !== 'open' );
     wp_set_current_user( CLU_TEST_ADMIN );
     t( 'approving', clu_set_user_status( $s1, 'approved' ) && clu_user_status_is_approved( $s1 ) && clu_status_pending_count() === 0 );
     t( 'the role is not touched', get_userdata( $s1 )->roles === [ 'subscriber' ] );
@@ -2158,12 +2205,12 @@ section( '27. A status on the user, next to the role' );
     } else {
         t( 'no email goes out for a status', ! $GLOBALS['clu_mails'] );
     }
-    t( 'the approved status opens restricted content', visit( $spage, $s1 ) === 'open' );
-    t( 'another subscriber still does not see it', visit( $spage, $s2 ) !== 'open' );
     t( 'a status does not stop a login', ! is_wp_error( wp_authenticate( 'clu_s2', 'Start1!pass' ) ) && clu_set_user_status( $s2, 'rejected' ) && ! is_wp_error( wp_authenticate( 'clu_s2', 'Start1!pass' ) ) );
-    t( 'a status is not the approval of a registration', ! clu_user_is_pending( get_userdata( $s2 ) ) && ! clu_user_is_rejected( get_userdata( $s2 ) ) && clu_available_decisions( get_userdata( $s2 ) ) === [] );
+    t( 'the registration functions read the same status', clu_user_is_rejected( get_userdata( $s2 ) ) && ! clu_user_is_pending( get_userdata( $s2 ) ) );
     clu_set_user_status( $s2, '' );
     t( 'removing it leaves no status', clu_get_user_status( $s2 ) === '' && get_user_meta( $s2, 'clu_status', true ) === '' );
+    t( 'an address not confirmed yet is a status too', clu_set_user_status( $s2, 'unconfirmed' ) && clu_user_is_unconfirmed( get_userdata( $s2 ) ) && apply_filters( 'manage_users_custom_column', '', 'clu_status', $s2 ) === 'Email not confirmed' );
+    clu_set_user_status( $s2, '' );
 
     // The users list.
     wp_set_current_user( CLU_TEST_ADMIN );
@@ -2226,17 +2273,8 @@ section( '27. A status on the user, next to the role' );
     wp_set_current_user( CLU_TEST_ADMIN );
     clu_register_settings();
     $saved = sanitize_option( 'clu_user_status', [ 'enabled' => 'yes', 'label' => ' Members <b>x</b> ' ] );
-    t( 'saving the tab keeps a clean flag and name', $saved === [ 'enabled' => '1', 'label' => 'Members x' ], wp_json_encode( $saved ) );
-    $saved = sanitize_option( 'clu_user_status', [ 'label' => 'Members' ] );
-    t( 'an unticked box saves as off', $saved['enabled'] === '' );
+    t( 'saving the tab keeps a clean name, and no on/off switch', ( $saved['label'] ?? '' ) === 'Members x' && ! isset( $saved['enabled'] ), wp_json_encode( $saved ) );
     wp_set_current_user( 0 );
-
-    // Turned off again: what was saved stays, and counts for nothing.
-    clu_set_user_status( $s1, 'approved' );
-    update_option( 'clu_user_status', [ 'enabled' => '', 'label' => 'Business customer' ] );
-    t( 'turned off, an approved status opens nothing', clu_get_user_status( $s1 ) === '' && visit( $spage, $s1 ) !== 'open' );
-    update_option( 'clu_user_status', [ 'enabled' => '1', 'label' => 'Business customer' ] );
-    t( 'turned on again, it is back', clu_get_user_status( $s1 ) === 'approved' );
 
     remove_action( 'clu_user_status_changed', $spy, 10 );
     wp_set_current_user( 0 );
@@ -2423,12 +2461,17 @@ section( '28. Nonces, templates, settings, update and uninstall' );
     update_user_meta( $marker_id, 'clu_approval_link', 1 );
     update_user_meta( $marker_id, 'clu_email_confirm', '1:x' );
     update_user_meta( $marker_id, 'clu_email_confirmed', 1 );
-    clu_add_unconfirmed_role();
+    // Left over from a version before 2.0 on a site that never finished the update.
+    foreach ( [ 'pending_user', 'approved_user', 'rejected_user', 'unconfirmed_user' ] as $r ) {
+        add_role( $r, $r, [] );
+    }
+    update_post_meta( $marker_page, '_clu_restricted', '1' );
+    update_user_meta( $marker_id, 'clu_signup', 1 );
     update_option( 'clu_mail', [ 'from_name' => 'x' ] );
     update_option( 'clu_replace_wp_login', '1' );
     update_option( 'clu_security', [ 'limit_logins' => '1' ] );
     update_option( 'clu_auto_approve', '1' );
-    update_option( 'clu_user_status', [ 'enabled' => '1', 'label' => 'Member' ] );
+    update_option( 'clu_user_status', [ 'label' => 'Member' ] );
     clu_set_user_status( $marker_id, 'approved' );
     foreach ( [ 'pending_user', 'approved_user', 'rejected_user', 'unconfirmed_user' ] as $r ) {
         foreach ( get_users( [ 'role' => $r, 'fields' => 'ID' ] ) as $uid ) {
@@ -2446,9 +2489,9 @@ section( '28. Nonces, templates, settings, update and uninstall' );
     t( 'uninstall removes the login protection settings', get_option( 'clu_security', 'gone' ) === 'gone' );
     t( 'uninstall removes the automatic approval setting', get_option( 'clu_auto_approve', 'gone' ) === 'gone' );
     t( 'uninstall removes the status setting and every status', get_option( 'clu_user_status', 'gone' ) === 'gone' && get_user_meta( $marker_id, 'clu_status', true ) === '' && get_user_meta( $marker_id, 'clu_status_changed_at', true ) === '' );
-    t( 'uninstall removes the flag on users', ! get_user_meta( $marker_id, 'clu_approval_link', true ) );
+    t( 'uninstall removes the flags on users', ! get_user_meta( $marker_id, 'clu_approval_link', true ) && ! get_user_meta( $marker_id, 'clu_signup', true ) );
     t( 'uninstall removes what confirmed an address', ! get_user_meta( $marker_id, 'clu_email_confirm', true ) && ! get_user_meta( $marker_id, 'clu_email_confirmed', true ) );
-    t( 'uninstall removes the flag on pages', get_post_meta( $marker_page, '_clu_restricted', true ) === '' );
+    t( 'uninstall removes the flag older versions left on pages', get_post_meta( $marker_page, '_clu_restricted', true ) === '' );
 }
 
 section( '29. PHP warnings raised from inside the plugin during all of the above' );
