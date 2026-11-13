@@ -1,0 +1,113 @@
+/* Settings screen of the plugin. Loaded on that screen only. */
+.clu-custom-settings {
+    background-color: #f9f9f9;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+}
+
+.clu-custom-settings h1 {
+    color: #333;
+    font-size: 24px;
+}
+.clu-custom-settings .form-table label {
+    display: block;
+    width: 300px;
+}
+.clu-custom-settings .form-table label.clu-checkbox-label {
+    width: auto;
+    max-width: 40em;
+}
+.clu-custom-settings .form-table input[type="text"] {
+    display: block;
+    width: 100%;
+    max-width: 400px;
+    padding: 2px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 0;
+}
+.clu-custom-settings .form-table tr {
+    background-color: #eee;
+}
+.clu-custom-settings .form-table tr:nth-child(2n) {
+    background-color: #fff;
+}
+.clu-custom-settings .form-table th,
+.clu-custom-settings .form-table td {
+    vertical-align: middle;
+    margin-bottom: 5px;
+    padding: 5px 10px;
+}
+
+.clu-custom-settings .tab-content {
+    display: none;
+}
+.clu-custom-settings .tab-content.active {
+    display: block;
+}
+.clu-custom-settings .spinner {
+    float: none;
+    vertical-align: middle;
+}
+.clu-shortcode-box {
+    margin: 12px 0;
+    padding: 8px 12px;
+    background: #f0f6fc;
+    border-inline-start: 4px solid #2271b1;
+}
+.clu-shortcode-box code {
+    font-size: 14px;
+    background: none;
+    color: #1d2327;
+}
+.clu-setup-table {
+    margin-top: 12px;
+}
+.clu-setup-table th,
+.clu-setup-table td {
+    padding: 8px 12px;
+}
+.clu-status--exists {
+    color: #007017;
+}
+.clu-status--missing {
+    color: #787c82;
+}
+.clu-status--warning {
+    color: #b32d2e;
+}
+
+/* Register Fields tab */
+.clu-fields-table {
+    margin-top: 12px;
+}
+.clu-fields-table td,
+.clu-fields-table th {
+    vertical-align: top;
+}
+.clu-fields-table .regular-text {
+    width: 100%;
+    max-width: 220px;
+}
+.clu-fields-table textarea {
+    display: block;
+    width: 100%;
+    max-width: 220px;
+    margin-top: 6px;
+}
+.clu-field-check {
+    text-align: center;
+}
+.clu-field-move {
+    white-space: nowrap;
+}
+.clu-field-move .button-link {
+    padding: 0 4px;
+    font-size: 16px;
+    text-decoration: none;
+}
+.clu-field-row:first-child .clu-field-up,
+.clu-field-row:last-child .clu-field-down {
+    visibility: hidden;
+}
