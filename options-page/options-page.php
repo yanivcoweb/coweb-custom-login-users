@@ -360,7 +360,7 @@ function clu_render_register_fields_tab() {
     ];
     ?>
     <h2>Register Fields</h2>
-    <p>Choose what the register form asks for, in what order, and what users can change later on the My Account form. The email is always on, because the approval flow runs through it.</p>
+    <p>Choose what the register form asks for, in what order, and what users can change later on the My Account form. The email is always on, because the approval flow runs through it. Every other field can be removed, the built-in ones too; a built-in field you removed can be added back below the table.</p>
     <p class="description">"On the form" and "Required" are about the main register form. A site with more forms chooses the fields of each one on the <strong>Register Forms</strong> tab, from this list: a field meant only for another form is added here, with "On the form" left off.</p>
     <p class="description">A checkbox label can hold a link, for example <code>I agree to the &lt;a href="/terms/"&gt;terms&lt;/a&gt;</code>.</p>
 
@@ -388,8 +388,22 @@ function clu_render_register_fields_tab() {
         <?php clu_render_register_field_row( $new_field ); ?>
     </template>
 
+    <?php // The built-in fields as they start out, for adding back one that was removed. ?>
+    <?php foreach ( clu_default_register_fields() as $builtin ) : ?>
+        <?php if ( $builtin['key'] !== 'email' ) : ?>
+            <template class="clu-builtin-row-template" data-key="<?php echo esc_attr( $builtin['key'] ); ?>" data-label="<?php echo esc_attr( $builtin['label'] ); ?>">
+                <?php clu_render_register_field_row( array_merge( $builtin, [ 'enabled' => false ] ) ); ?>
+            </template>
+        <?php endif; ?>
+    <?php endforeach; ?>
+
     <p style="margin-top:16px;">
         <button type="button" id="clu-add-field-btn" class="button">Add Field</button>
+        <span id="clu-add-builtin-wrap" hidden>
+            <label for="clu-add-builtin-select" class="screen-reader-text">A built-in field that was removed</label>
+            <select id="clu-add-builtin-select" style="margin-inline-start:16px;"></select>
+            <button type="button" id="clu-add-builtin-btn" class="button">Add Back</button>
+        </span>
     </p>
     <p>
         <button type="button" id="clu-save-fields-btn" class="button button-primary">Save Register Fields</button>
@@ -453,7 +467,7 @@ function clu_render_register_field_row( $field ) {
             <input type="text" class="clu-field-placeholder regular-text" aria-label="Placeholder" value="<?php echo esc_attr( $field['placeholder'] ); ?>">
         </td>
         <td>
-            <?php if ( ! $is_builtin ) : ?>
+            <?php if ( ! $is_email ) : ?>
                 <button type="button" class="button-link button-link-delete clu-field-remove">Remove</button>
             <?php endif; ?>
         </td>

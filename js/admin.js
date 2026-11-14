@@ -111,6 +111,23 @@ jQuery(function ($) {
         $(this).trigger('focus');
     });
 
+    // The built-in fields that are not in the table can be added back.
+    function syncBuiltinChoices() {
+        const $select = $('#clu-add-builtin-select').empty();
+
+        $('.clu-builtin-row-template').each(function () {
+            const key = $(this).attr('data-key');
+
+            if (!$fieldRows.find('.clu-field-row[data-key="' + key + '"]').length) {
+                $select.append($('<option>').val(key).text($(this).attr('data-label')));
+            }
+        });
+
+        $('#clu-add-builtin-wrap').prop('hidden', !$select.children().length);
+    }
+
+    syncBuiltinChoices();
+
     $fieldRows.on('click', '.clu-field-remove', function () {
         const $row = $(this).closest('.clu-field-row');
 
@@ -119,6 +136,25 @@ jQuery(function ($) {
         }
 
         $row.remove();
+        syncBuiltinChoices();
+    });
+
+    $('#clu-add-builtin-btn').on('click', function () {
+        const key       = $('#clu-add-builtin-select').val();
+        const $template = $('.clu-builtin-row-template').filter(function () {
+            return $(this).attr('data-key') === key;
+        });
+
+        if (!$template.length) {
+            return;
+        }
+
+        const $row = $($template.html().trim());
+
+        $fieldRows.append($row);
+        syncFieldRow($row);
+        syncBuiltinChoices();
+        $row.find('.clu-field-label').trigger('focus');
     });
 
     $('#clu-add-field-btn').on('click', function () {

@@ -38,7 +38,8 @@ function clu_save_register_fields_handler() {
  * @return array[]|WP_Error
  */
 function clu_sanitize_register_fields( $rows ) {
-    $known = array_column( clu_get_register_fields(), 'key' );
+    // A built-in field the site removed keeps its key, so that it can be added back.
+    $known = array_values( array_unique( array_merge( array_column( clu_get_register_fields(), 'key' ), array_column( clu_default_register_fields(), 'key' ) ) ) );
     $taken = $known;
     $clean = [];
 

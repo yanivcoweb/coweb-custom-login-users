@@ -200,6 +200,8 @@ On **Settings > Custom Login Users > Register Fields**, each field has:
 
 A new site starts with first name, last name and email. Company, Customer Type, Region and Country are built in, ready to be turned on. A site updated from an older version keeps its form as it was.
 
+Every field can be removed except the email, the built-in ones too. A built-in field that was removed can be added back with **Add Back**, below the table; what users filled in before is still there.
+
 Custom fields can be text, long text, phone, number, web address, dropdown or checkbox, and are checked on the server by their type. A checkbox label can hold a link, for terms of use. Values are saved as user meta under `clu_field_<name>`, a key that stays the same when the label changes. Removing a field keeps what users already filled in, in the database.
 
 ---
@@ -293,6 +295,10 @@ php tests/run-tests.php /path/to/wp-load.php --bare
 ---
 
 ## Changelog
+
+### 2.1.1
+
+- Every register field can be removed except the email. Until now the built-in fields (first name, last name, Company, Customer Type, Region, Country) could only be turned off. A built-in field that was removed can be added back below the table.
 
 ### 2.1.0
 

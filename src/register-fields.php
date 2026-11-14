@@ -69,7 +69,8 @@ function clu_checkbox_label_tags() {
 }
 
 /**
- * Tells whether a field is one of the built-in ones, whose key and type are fixed.
+ * Tells whether a field is one of the built-in ones, whose key and type are fixed. A
+ * site may have removed some of them from its list.
  *
  * @param string $key
  * @return bool
@@ -81,8 +82,10 @@ function clu_is_builtin_field( $key ) {
 /**
  * Turns saved rows into the complete field list.
  *
- * A built-in field can never go missing or change its type, and the email is always
- * on and required, because the whole approval flow runs through it. Custom fields live
+ * A built-in field cannot change its type, and the email is always there, on and
+ * required, because the whole approval flow runs through it. Every other field can be
+ * removed, the built-in ones too: a built-in field the saved list lacks is simply not
+ * a field of the site, until it is added back on the settings screen. Custom fields live
  * under the clu_field_ prefix, so no field can ever write over a meta key that means
  * something to WordPress, such as the one that holds a user's capabilities.
  *
@@ -131,11 +134,8 @@ function clu_normalize_register_fields( $rows ) {
         ];
     }
 
-    // A built-in the saved list lacks stays off, so a saved form does not grow by itself.
-    foreach ( $builtins as $key => $builtin ) {
-        if ( ! isset( $fields[ $key ] ) ) {
-            $fields[ $key ] = array_merge( $builtin, [ 'enabled' => false ] );
-        }
+    if ( ! isset( $fields['email'] ) ) {
+        $fields['email'] = $builtins['email'];
     }
 
     $fields['email'] = array_merge( $fields['email'], [ 'enabled' => true, 'required' => true, 'account' => true ] );
